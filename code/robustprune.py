@@ -8,70 +8,40 @@ import networkx as nx
 from scipy.stats import rankdata
 import psutil
 from utils import *
+import pandas as pd
+import os
+
 
 def main():
-    DATAPATH = "/scratch/pa2439/Projects/ANN-Search/datasets/"
-    DATASETS = ["fashion-mnist-784-euclidean", "mnist-784-euclidean", "sift-128-euclidean"]
-    SAVEPATH = "/scratch/pa2439/Projects/ANN-Search/code/results/newrobustprune/"
-    # DATASET = "fashion-mnist-784-euclidean"
-    
+    SAVEPATH = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/results"
+    DATASETS = pd.read_csv("/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
+    DATASETS = sorted(DATASETS, key=lambda x: x['train']) 
 
-    for DATASET in DATASETS[2:]:
-        print(f"Building graphs on {DATASET}")
-        data = h5py.File(DATAPATH + DATASET + ".hdf5")
+    done = set([s.split('-')[2] for s in os.listdir(SAVEPATH)])
 
-        dataset = cp.asarray(data['train'][:])
-        n = dataset.shape[0]
-
-        robustPruneGraph = memBuildRobustPruneGraph(dataset)
-
-        saveGraph(n, robustPruneGraph, f"{SAVEPATH}adjlist-{DATASET}-{n}-vertices-robust-prune.dat")
-
-    '''
-    for DATASET in DATASETS[1:2]:
-        print(f"Building graphs on {DATASET}")
-        data = h5py.File(DATAPATH + DATASET + ".hdf5")
-        # ratios = [0.1, 0.2, 0.4, 0.6, 0.8, 1]
-        ratios = [0.6, 0.8, 1]
+    for DATASET in DATASETS:
+        if DATASET['name'] in done:
+            print('skipping', DATASET['name'])
+            continue
+        #if DATASET['metric'] != 'euclidean':
+        #   print("Skipping", DATASET['name'])
+        #  continue
+         
+        print(f"Building graph on {DATASET['name']}")
+        data = h5py.File(DATASET['filepath'], 'r')['train']
         
-        for r in ratios:
-            n = int(data['train'].shape[0] * r)
-
-            # Load dataset to CPU first
-            # dataset = data['train'][:n]
-            dataset = data['train'][np.sort(np.random.choice(data['train'].shape[0], n, replace=False))]
-
-            # Transfer to GPU and compute pairwise distances on GPU in chunks
-
-            chunk_size = auto_chunk_size(dataset.shape)  # Adjust based on your memory
-
-            permutation_matrix = cp.empty((n, n), dtype=cp.uint16 if np.log2(n) <= 16 else cp.uint32)
-
-            for i in range(0, n, chunk_size):
-                end_i = min(i + chunk_size, n)
-                
-                # Compute pairwise distances for this chunk (on CPU)
-                chunk_distances = cdist(dataset[i:end_i], dataset, metric='euclidean')
-                
-                # Set diagonal to -1 for rows that correspond to diagonal elements
-                for j in range(end_i - i):
-                    if i + j < n:
-                        chunk_distances[j, i + j] = -1
-                
-                # Compute ranks and transfer to GPU
-                chunk_ranks = rankdata(chunk_distances, method='ordinal', axis=1)
-                print(f"Chunk shape: {chunk_ranks.shape}")
-                permutation_matrix[i:end_i] = cp.asarray(chunk_ranks, dtype=cp.uint16 if np.log2(n) <= 16 else cp.uint32)
-
-            
-            print("Permutation matrix shape:", permutation_matrix.shape)
-
-            # Build robust prune graph on GPU
-            robustPruneGraph = buildRobustPruneGraph(permutation_matrix)
-
-            # store built graph
-            saveGraph(n, robustPruneGraph, f"{SAVEPATH}adjlist-{DATASET}-{n}-vertices-robust-prune.dat")
-    '''
-
+        dataset = cp.asarray(data[:])
+        
+        if DATASET['train'] < 1000000:
+            robustPruneGraph = memBuildRobustPruneGraph(dataset)
+        
+        else:
+            continue
+            points = np.random.choice(DATASET['train'], 60000, replace=False)
+            robustPruneGraph = smallSampleBuildRobustPruneGraph(dataset, points)
+        
+        n = len(robustPruneGraph)
+        saveGraph(n, robustPruneGraph, f"{SAVEPATH}/adj-list-{DATASET['name']}-{n}-vertices-euclidean")
+    
 if __name__ == '__main__':
     main()

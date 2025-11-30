@@ -3,6 +3,7 @@ import cupy as cp
 import h5py
 from tqdm import tqdm
 from cupyx.scipy.spatial.distance import cdist
+from scipy.spatial.distance import cdist as npcdist
 import matplotlib.pyplot as plt
 import networkx as nx
 from scipy.stats import rankdata
@@ -14,17 +15,17 @@ def saveGraph(n, graph, outfile):
     print("Building adjacency matrix...")
     E = []
     for i in range(n):
-        for j in range(len(graph[i])):
-            E.append((i, graph[i][j]))
+        for j in range(1, len(graph[i])):
+            E.append((graph[i][0], graph[i][j]))
 
     # Create adjacency matrix on GPU
-    adj = cp.zeros((n, n), dtype=cp.int16)
-    for (u, v) in E:
-        adj[u][v] = 1
+    # adj = cp.zeros((n, n), dtype=cp.int16)
+    # for (u, v) in E:
+    #    adj[u][v] = 1
 
     # Transfer back to CPU and save
-    adj_cpu = cp.stack(adj.nonzero()).get()
-    np.save(outfile, adj_cpu)
+    # adj_cpu = cp.stack(adj.nonzero()).get()
+    np.save(outfile, np.array(E))
 
     print(f"Saved adjacency matrix with {len(E)} edges. Shape: {adj_cpu.shape}")
 
@@ -162,7 +163,7 @@ def memEfficientRobustPrune(source, dataset):
     active = cp.ones(n, dtype=cp.bool_)
     active[source] = False
     
-    edges = []
+    edges = [source]
 
     while cp.any(active):
         masked_dist = cp.where(active, dist_from_source, cp.inf)
@@ -178,6 +179,56 @@ def memEfficientRobustPrune(source, dataset):
 
     return edges
 
+def angularRobustPrune(source, dataset):
+    n = dataset.shape[0]
+
+    cosine_distance = cdist(dataset[source:source+1], dataset, metric='cosine').flatten()
+    dist_from_source = cp.arccos(1 - cosine_distance)
+    
+    active = cp.ones(n, dtype=cp.bool_)
+    active[source] = False
+    
+    edges = [source]
+
+    while cp.any(active):
+        masked_dist = cp.where(active, dist_from_source, cp.inf)
+        waypoint = cp.argmin(masked_dist).item()
+
+        edges.append(waypoint)
+        active[waypoint] = False
+        
+        # print(active.shape, dist_from_source.shape)
+
+        prune_mask = (cp.arccos(1 - cdist(dataset, dataset[waypoint:waypoint+1], metric='cosine')).ravel() < dist_from_source) & active
+        active[prune_mask] = False
+
+    return edges
+
+def jaccardRobustPrune(source, dataset):
+    n = dataset.shape[0]
+
+    cosine_distance = npdist(dataset[source:source+1], dataset, metric='jaccard').flatten()
+    
+    active = np.ones(n, dtype=np.bool_)
+    active[source] = False
+    
+    edges = [source]
+
+    while cp.any(active):
+        masked_dist = np.where(active, dist_from_source, np.inf)
+        waypoint = np.argmin(masked_dist).item()
+
+        edges.append(waypoint)
+        active[waypoint] = False
+        
+        # print(active.shape, dist_from_source.shape)
+
+        prune_mask = (npdist(dataset, dataset[waypoint:waypoint+1], metric='jaccard').ravel() < dist_from_source) & active
+        active[prune_mask] = False
+
+    return edges
+
+
 def memBuildRobustPruneGraph(dataset):
     n = dataset.shape[0]
     edgeSet = []
@@ -188,11 +239,11 @@ def memBuildRobustPruneGraph(dataset):
 
     return edgeSet
 
-def smallSampleBuildRobustPruneGraph(dataset, k):
+def smallSampleBuildRobustPruneGraph(dataset, points):
     n = dataset.shape[0]
     edgeSet = []
 
-    for source in tqdm(np.random.choice(n, size=k, replace=False)):
+    for source in points:
         edges = memEfficientRobustPrune(source, dataset)
         edgeSet.append(edges)
 
@@ -336,6 +387,14 @@ def buildHybridSetCoverWithBetterFriends(dataset, k, v):
 
     return edgeSet
 
+def computeDistances(X, Y, metric):
+    if metric in ['euclidean', 'jaccard']:
+        return cdist(X, Y, metric=metric)
+    elif metric == 'angular':
+        return cp.arccos(cp.clip(1 - cdist(X, Y, metric='cosine'), -1, 1))
+    else:
+        return None
+
 ### CHUNKING FOR MEMORY EFFICIENT ROBUST PRUNE ###
 
 def auto_chunk_size(dataset_shape, safety_factor=0.6):
@@ -364,3 +423,18 @@ def auto_chunk_size(dataset_shape, safety_factor=0.6):
     print(f"Recommended chunk_size: {chunk_size}")
     
     return chunk_size
+
+def checkNavigability(dist, graph):
+    n = dist.shape[0]
+    for i in tqdm(range(n)):
+        # distances = np.array([np.linalg.norm(dataset[i] - dataset[e[1]]) for e in graph[i])
+        for j in np.random.choice(n, 1000, replace=False):
+            if j == i:
+                continue
+            distances = np.array([dist[j][e] for e in graph[i]])
+            if not np.any(distances <= dist[i][j]):
+                print("Found no greedy edge. G is not navigable.")
+                print(i, j, dist[i][j], '\n', distances)
+                return
+
+    print("G appears to be navigable")

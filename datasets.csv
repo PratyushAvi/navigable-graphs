@@ -1,0 +1,16 @@
+,name,dimensions,metric,train,test,filepath,size
+0,gist,960,euclidean,1000000,1000,/scratch/pa2439/Projects/ANN-Search/datasets/gist-960-euclidean.hdf5,3.844648288
+1,movielens10m,65134,jaccard,8181236,60888,/scratch/pa2439/Projects/ANN-Search/datasets/movielens10m-65134-jaccard.hdf5,0.066624636
+2,deep_image,96,angular,9990000,10000,/scratch/pa2439/Projects/ANN-Search/datasets/deep_image-96-angular.hdf5,3.848008288
+3,glove25,25,angular,1183514,10000,/scratch/pa2439/Projects/ANN-Search/datasets/glove25-25-angular.hdf5,0.127359688
+4,kosarak,27983,jaccard,4167103,27311,/scratch/pa2439/Projects/ANN-Search/datasets/kosarak-27983-jaccard.hdf5,0.034265352
+5,sift,128,euclidean,1000000,10000,/scratch/pa2439/Projects/ANN-Search/datasets/sift-128-euclidean.hdf5,0.525128288
+6,mnist,784,euclidean,60000,10000,/scratch/pa2439/Projects/ANN-Search/datasets/mnist-784-euclidean.hdf5,0.227528288
+7,fashion_mnist,784,euclidean,60000,10000,/scratch/pa2439/Projects/ANN-Search/datasets/fashion_mnist-784-euclidean.hdf5,0.227528288
+8,coco_t2i,512,angular,113287,10000,/scratch/pa2439/Projects/ANN-Search/datasets/coco_t2i-512-angular.hdf5,0.14225408
+9,coco_i2i,512,angular,113287,10000,/scratch/pa2439/Projects/ANN-Search/datasets/coco_i2i-512-angular.hdf5,0.14225408
+10,glove200,200,angular,1183514,10000,/scratch/pa2439/Projects/ANN-Search/datasets/glove200-200-angular.hdf5,0.962819488
+11,glove,50,angular,1183514,10000,/scratch/pa2439/Projects/ANN-Search/datasets/glove-50-angular.hdf5,0.246711088
+12,lastfm,64,angular,292385,50000,/scratch/pa2439/Projects/ANN-Search/datasets/lastfm-64-angular.hdf5,0.142028388
+13,nytimes,256,angular,290000,10000,/scratch/pa2439/Projects/ANN-Search/datasets/nytimes-256-angular.hdf5,0.315208288
+14,glove100,100,angular,1183514,10000,/scratch/pa2439/Projects/ANN-Search/datasets/glove100-100-angular.hdf5,0.485413888
