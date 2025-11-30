@@ -52,11 +52,11 @@ def main():
 
     # pick specific function
     if DATASETS[DATASET]['metric'] == 'euclidean':
-        f = memEfficientRobustPrune
+        buildGraph = memEfficientRobustPrune
     elif DATASETS[DATASET]['metric'] == 'angular':
-        f = angularRobustPrune
+        buildGraph = angularRobustPrune
     elif DATASETS[DATASET]['metric'] == 'jaccard':
-        f = jaccardRobustPrune
+        buildGraph = jaccardRobustPrune
     else:
         print('dunno')
         return
@@ -64,7 +64,7 @@ def main():
     for source in tqdm(sources_to_process):
         if source not in completed:
 
-            edges = f(source, dataset)
+            edges = buildGraph(source, dataset)
 
             with open(f"{SAVEPATH}/adj-list-{DATASET}-{DATASETS[DATASET]['metric']}.txt", 'a') as adj:
                 # FIX: Added closing parenthesis and newline character
