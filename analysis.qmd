@@ -1,0 +1,9 @@
+---
+title: "Navigable Graph Dataset Analysis"
+format: gfm
+---
+
+```{python}
+import pandas as pd
+pd.read_csv("./stats.csv", index_col=False)
+```
