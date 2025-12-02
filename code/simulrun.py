@@ -41,6 +41,8 @@ def main():
     
     if DATASETS[DATASET]['metric'] != 'jaccard':
         dataset = cp.asarray(data)
+    else:
+        dataset = np.asarray(data)
 
     # FIX: np.random.shuffle returns None, must shuffle the array first
     all_sources = np.arange(dataset.shape[0])
