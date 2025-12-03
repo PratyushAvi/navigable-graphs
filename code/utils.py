@@ -207,7 +207,7 @@ def angularRobustPrune(source, dataset):
 def jaccardRobustPrune(source, dataset):
     n = dataset.shape[0]
 
-    dist_from_source = npcdist(dataset[source:source+1], dataset, metric='jaccard').flatten()
+    dist_from_source = npcdist(dataset[source], dataset, metric='jaccard').flatten()
     
     active = np.ones(n, dtype=np.bool_)
     active[source] = False
@@ -223,7 +223,7 @@ def jaccardRobustPrune(source, dataset):
         
         # print(active.shape, dist_from_source.shape)
 
-        prune_mask = (npcdist(dataset, dataset[waypoint:waypoint+1], metric='jaccard').ravel() < dist_from_source) & active
+        prune_mask = (npcdist(dataset, dataset[waypoint], metric='jaccard').ravel() < dist_from_source) & active
         active[prune_mask] = False
 
     return edges

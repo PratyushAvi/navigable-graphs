@@ -16,6 +16,12 @@ def main():
         required=True,
         help="The name of the dataset to process (e.g., 'mnist', 'sift')."
     )
+    parser.add_argument(
+        '--metric',
+        type=str,
+        default='default',
+        help='Distance metric (e.g. euclidean, angular)'
+    )
     args = parser.parse_args()
     DATASET = args.dataset # Get dataset name from argument
 
@@ -31,15 +37,20 @@ def main():
     if DATASET not in DATASETS:
         print(f"Error: Dataset '{DATASET}' not found in the loaded metadata.")
         return
+    
+    if args.metric == 'default':
+        metric = DATASETS[DATASET]['metric']
+    else:
+        metric = args.metric
 
     # assume no other program is trying to edges simultaneously
-    with open(f"{SAVEPATH}/{DATASET}-{DATASETS[DATASET]['metric']}-computed.txt", 'a+') as f:
+    with open(f"{SAVEPATH}/{DATASET}-{metric}-computed.txt", 'a+') as f:
         f.seek(0)
         completed = set([int(line.strip()) for line in f if line.strip()])
 
     data = h5py.File(DATASETS[DATASET]['filepath'], 'r')['train']
     
-    if DATASETS[DATASET]['metric'] != 'jaccard':
+    if metric != 'jaccard':
         dataset = cp.asarray(data)
     else:
         dataset = np.asarray(data)
@@ -53,11 +64,11 @@ def main():
 
 
     # pick specific function
-    if DATASETS[DATASET]['metric'] == 'euclidean':
+    if metric == 'euclidean':
         buildGraph = memEfficientRobustPrune
-    elif DATASETS[DATASET]['metric'] == 'angular':
+    elif metric == 'angular':
         buildGraph = angularRobustPrune
-    elif DATASETS[DATASET]['metric'] == 'jaccard':
+    elif metric == 'jaccard':
         buildGraph = jaccardRobustPrune
     else:
         print('dunno')
@@ -68,11 +79,11 @@ def main():
 
             edges = buildGraph(source, dataset)
 
-            with open(f"{SAVEPATH}/adj-list-{DATASET}-{DATASETS[DATASET]['metric']}.txt", 'a') as adj:
+            with open(f"{SAVEPATH}/adj-list-{DATASET}-{metric}.txt", 'a') as adj:
                 # FIX: Added closing parenthesis and newline character
                 adj.write(','.join([str(e) for e in edges]) + '\n')
             
-            with open(f"{SAVEPATH}/{DATASET}-{DATASETS[DATASET]['metric']}-computed.txt", 'a') as f:
+            with open(f"{SAVEPATH}/{DATASET}-{metric}-computed.txt", 'a') as f:
                 f.write(f"{source}\n")
         
     print(f"Done with {DATASET}")
