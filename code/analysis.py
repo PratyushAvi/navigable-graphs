@@ -15,7 +15,7 @@ def main():
 
     stats = []
 
-    for file in tqdm(adjLists):
+    for file in adjLists:
     
         G = nx.DiGraph()
     
@@ -30,6 +30,7 @@ def main():
         splits = file.replace(".txt", "").split("-")
         outDeg = [d for _,d in G.out_degree() if d != 0]
         inDeg = [d for _,d in G.in_degree() if d != 0]
+        print(sum(outDeg), sum(inDeg))
 
         stats.append([
             splits[3],
@@ -37,15 +38,16 @@ def main():
             DATASETS[splits[3]]['dimensions'],
             counter,
             DATASETS[splits[3]]['train'],
-            np.round(np.mean(outDeg), 2),
-            np.round(np.mean(inDeg), 2),
+            np.round(sum(outDeg)/counter, 2),
             np.median(outDeg),
             np.median(inDeg),
             np.min(outDeg),
-            np.max(outDeg)
+            np.max(outDeg),
+            np.min(inDeg),
+            np.max(inDeg)
         ])
 
-    pd.DataFrame(stats, columns=['dataset', 'metric', 'dimensions', 'points computed', 'total points', 'mean out degree', 'mean in degree', 'median out degree', 'median in degree', 'min out degree', 'max out degree']).to_csv("/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/stats.csv")
+    pd.DataFrame(stats, columns=['dataset', 'metric', 'dimensions', 'points computed', 'total points', 'mean out degree', 'median out degree', 'median in degree', 'min out degree', 'max out degree', 'min in degree', 'max in degree']).to_csv("/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/stats.csv")
 
 if __name__ == '__main__':
     main()
