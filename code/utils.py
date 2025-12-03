@@ -183,7 +183,7 @@ def angularRobustPrune(source, dataset):
     n = dataset.shape[0]
 
     cosine_distance = cdist(dataset[source:source+1], dataset, metric='cosine').flatten()
-    dist_from_source = cp.arccos(1 - cosine_distance)
+    dist_from_source = cp.arccos(cosine_distance)
     
     active = cp.ones(n, dtype=cp.bool_)
     active[source] = False
@@ -199,7 +199,7 @@ def angularRobustPrune(source, dataset):
         
         # print(active.shape, dist_from_source.shape)
 
-        prune_mask = (cp.arccos(1 - cdist(dataset, dataset[waypoint:waypoint+1], metric='cosine')).ravel() < dist_from_source) & active
+        prune_mask = (cp.arccos(cdist(dataset, dataset[waypoint:waypoint+1], metric='cosine')).ravel() < dist_from_source) & active
         active[prune_mask] = False
 
     return edges
