@@ -28,9 +28,23 @@ def main():
                     G.add_edge(points[0], points[i])
     
         splits = file.replace(".txt", "").split("-")
-        outDeg = [d for _,d in G.out_degree() if d != 0]
-        inDeg = [d for _,d in G.in_degree()]
+        outDeg = np.zeros(DATASETS[splits[3]]['train'], dtype=np.int16)
+        inDeg = np.zeros(DATASETS[splits[3]]['train'], dtype=np.int16)
+
+        for i,d in G.out_degree():
+            outDeg[i] = d
+        
+        for i,d in G.in_degree():
+            inDeg[i] = d
+
+        # outDeg = [d for _,d in G.out_degree() if d != 0]
+        # inDeg = [d for _,d in G.in_degree()]
         # print(splits[3], sum(outDeg), sum(inDeg), np.mean(outDeg), np.mean(inDeg), len(G))
+        
+        np.savetxt(f'/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/degrees/{splits[3]}-{splits[4]}-out-degrees.txt', outDeg.reshape(1, -1), fmt='%d',  delimiter=',')
+        np.savetxt(f'/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/degrees/{splits[3]}-{splits[4]}-in-degrees.txt', inDeg.reshape(1, -1), fmt='%d', delimiter=',')
+
+        outDegNNZ = outDeg[outDeg != 0]
 
         stats.append([
             splits[3],
@@ -38,11 +52,11 @@ def main():
             DATASETS[splits[3]]['dimensions'],
             counter,
             DATASETS[splits[3]]['train'],
-            np.round(np.mean(outDeg), 2),
-            np.median(outDeg),
+            np.round(np.mean(outDegNNZ), 2),
+            np.median(outDegNNZ),
             np.median(inDeg),
-            np.min(outDeg),
-            np.max(outDeg),
+            np.min(outDegNNZ),
+            np.max(outDegNNZ),
             np.min(inDeg),
             np.max(inDeg)
         ])
