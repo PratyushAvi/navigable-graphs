@@ -28,8 +28,8 @@ def main():
                     G.add_edge(points[0], points[i])
     
         splits = file.replace(".txt", "").split("-")
-        outDeg = np.zeros(DATASETS[splits[3]]['train'], dtype=np.int16)
-        inDeg = np.zeros(DATASETS[splits[3]]['train'], dtype=np.int16)
+        outDeg = np.zeros(DATASETS[splits[3]]['train'], dtype=np.uint32)
+        inDeg = np.zeros(DATASETS[splits[3]]['train'], dtype=np.uint32)
 
         for i,d in G.out_degree():
             outDeg[i] = d
