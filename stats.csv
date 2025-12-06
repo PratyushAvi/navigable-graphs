@@ -1,9 +1,9 @@
 ,dataset,metric,dimensions,points computed,total points,mean out degree,median out degree,median in degree,min out degree,max out degree,min in degree,max in degree
 0,coco_i2i,euclidean,512,113287,113287,28.59,27.0,24.0,2,131,1,268
-1,glove25,euclidean,25,983069,1183514,50.41,50.0,36.0,1,140,0,351
+1,glove25,euclidean,25,1183514,1183514,50.41,50.0,43.0,1,141,1,422
 2,coco_t2i,euclidean,512,113287,113287,28.59,27.0,24.0,2,131,1,268
-3,gist,euclidean,960,109732,1000000,74.07,56.0,7.0,1,1385,0,84
+3,gist,euclidean,960,220821,1000000,74.1,56.0,15.0,1,2364,0,166
 4,fashion_mnist,euclidean,784,60000,60000,13.55,12.0,12.0,1,108,1,117
 5,mnist,euclidean,784,60000,60000,19.64,19.0,17.0,2,67,1,134
-6,deep_image,euclidean,96,75753,9990000,75.22,73.0,0.0,17,318,0,15
+6,deep_image,euclidean,96,153139,9990000,75.12,73.0,1.0,15,318,0,26
 7,sift,euclidean,128,999978,1000000,37.88,35.0,36.0,5,287,1,337
