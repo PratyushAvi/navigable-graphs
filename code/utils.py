@@ -178,6 +178,142 @@ def memEfficientRobustPrune(source, dataset):
         active[prune_mask] = False
 
     return edges
+'''
+def compute_distances_batched(query_vec, dataset, batch_size=100000):
+    n = dataset.shape[0]
+    distances = cp.empty(n, dtype=cp.float32)
+    
+    for start in tqdm(range(0, n, batch_size)):
+        end = min(start + batch_size, n)
+        batch = cp.array(dataset[start:end], dtype=cp.float32)
+        distances[start:end] = cdist(query_vec, batch, metric='sqeuclidean')[0]
+    
+    return distances
+
+
+def compute_distances_batched_indexed(query_vec, dataset, indices_np, batch_size=100000):
+    """Compute distances to specific indices in the dataset."""
+    n = len(indices_np)
+    distances = cp.empty(n, dtype=cp.float32)
+    for start in tqdm(range(0, n, batch_size)):
+        end = min(start + batch_size, n)
+        batch_indices = indices_np[start:end]
+        batch = cp.array(dataset[batch_indices], dtype=cp.float32)
+        distances[start:end] = cdist(query_vec, batch, metric='sqeuclidean')[0]
+    return distances
+
+
+def billionRobustPrune(source, dataset, batch_size=100000):
+    n = dataset.shape[0]
+    source_vec = cp.array(dataset[source:source+1], dtype=cp.float32)
+    dist_from_source = compute_distances_batched(source_vec, dataset, batch_size)
+    active = cp.ones(n, dtype=cp.bool_)
+    active[source] = False
+    edges = [source]
+    while cp.any(active):
+        print(f"{cp.sum(active):,} left")
+        masked_dist = cp.where(active, dist_from_source, cp.inf)
+        waypoint = cp.argmin(masked_dist).item()
+        edges.append(waypoint)
+        active[waypoint] = False
+        # Get indices of active points and convert to NumPy for h5py indexing
+        active_indices = cp.where(active)[0]
+        active_indices_np = active_indices.get()
+        
+        waypoint_vec = cp.array(dataset[waypoint:waypoint+1], dtype=cp.float32)
+        # Compute distances only to active points (batched)
+        dist_from_waypoint_active = compute_distances_batched_indexed(
+            waypoint_vec, dataset, active_indices_np, batch_size
+        )
+        # Map distances back to original indices
+        prune_mask_active = dist_from_waypoint_active < dist_from_source[active_indices]
+        
+        # Update active array using the active indices
+        prune_indices = active_indices[prune_mask_active]
+        active[prune_indices] = False
+    return edges
+'''
+
+def compute_distances_batched(query_vec, dataset, batch_size=100000):
+    n = dataset.shape[0]
+    distances = np.empty(n, dtype=np.float32)
+    for start in tqdm(range(0, n, batch_size)):
+        end = min(start + batch_size, n)
+        batch = np.array(dataset[start:end], dtype=np.float32)
+        distances[start:end] = npcdist(query_vec, batch, metric='sqeuclidean')[0]
+    return distances
+
+def compute_distances_batched_indexed(query_vec, dataset, indices_np, batch_size=100000):
+    """Compute distances to specific indices in the dataset."""
+    n = len(indices_np)
+    distances = np.empty(n, dtype=np.float32)
+    for start in tqdm(range(0, n, batch_size)):
+        end = min(start + batch_size, n)
+        batch_indices = indices_np[start:end]
+        batch = np.array(dataset[batch_indices], dtype=np.float32)
+        distances[start:end] = npcdist(query_vec, batch, metric='sqeuclidean')[0]
+    return distances
+
+
+def billionRobustPrune(source, dataset, batch_size=100000):
+    n = dataset.shape[0]
+    source_vec = np.array(dataset[source:source+1], dtype=np.float32)
+    dist_from_source = compute_distances_batched(source_vec, dataset, batch_size)
+    
+    active = np.ones(n, dtype=np.bool_)
+    active[source] = False
+    edges = [source]
+    
+    while np.any(active):
+        print(f"{np.sum(active):,} left")
+        masked_dist = np.where(active, dist_from_source, np.inf)
+        waypoint = np.argmin(masked_dist).item()
+        edges.append(waypoint)
+        active[waypoint] = False
+        
+        # Get indices of active points
+        active_indices = np.where(active)[0]
+        
+        waypoint_vec = np.array(dataset[waypoint:waypoint+1], dtype=np.float32)
+        # Compute distances only to active points (batched)
+        dist_from_waypoint_active = compute_distances_batched_indexed(
+            waypoint_vec, dataset, active_indices, batch_size
+        )
+        
+        # Map distances back to original indices
+        prune_mask_active = dist_from_waypoint_active < dist_from_source[active_indices]
+        
+        # Update active array using the active indices
+        prune_indices = active_indices[prune_mask_active]
+        active[prune_indices] = False
+    
+    return edges
+
+
+# def billionRobustPrune(source, dataset, batch_size=100000):
+#     n = dataset.shape[0]
+    
+#     source_vec = cp.array(dataset[source:source+1], dtype=cp.float32)
+#     dist_from_source = compute_distances_batched(source_vec, dataset, batch_size)
+    
+#     active = cp.ones(n, dtype=cp.bool_)
+#     active[source] = False
+#     edges = [source]
+    
+#     while cp.any(active):
+#         print(f"{cp.sum(active):,} left")
+#         masked_dist = cp.where(active, dist_from_source, cp.inf)
+#         waypoint = cp.argmin(masked_dist).item()
+#         edges.append(waypoint)
+#         active[waypoint] = False
+        
+#         waypoint_vec = cp.array(dataset[waypoint:waypoint+1], dtype=cp.float32)
+#         dist_from_waypoint = compute_distances_batched(waypoint_vec, dataset, batch_size)
+        
+#         prune_mask = (dist_from_waypoint < dist_from_source) & active
+#         active[prune_mask] = False
+    
+#     return edges
 
 def angularRobustPrune(source, dataset):
     n = dataset.shape[0]
