@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from scipy.stats import rankdata
 import psutil
+import numba as nb
 
 ### METHOD TO SAVE GRAPHS ###
 
@@ -178,142 +179,151 @@ def memEfficientRobustPrune(source, dataset):
         active[prune_mask] = False
 
     return edges
-'''
-def compute_distances_batched(query_vec, dataset, batch_size=100000):
-    n = dataset.shape[0]
-    distances = cp.empty(n, dtype=cp.float32)
+
+def load_hdf5_safe(filepath, dataset_name='data'):
+    """Load HDF5 with memory availability check"""
     
-    for start in tqdm(range(0, n, batch_size)):
-        end = min(start + batch_size, n)
-        batch = cp.array(dataset[start:end], dtype=cp.float32)
-        distances[start:end] = cdist(query_vec, batch, metric='sqeuclidean')[0]
+    with h5py.File(filepath, 'r') as f:
+        dset = f[dataset_name]
+        required_gb = dset.nbytes / (1024**3)
+        available_gb = psutil.virtual_memory().available / (1024**3)
+        
+        print(f"Dataset size: {required_gb:.2f} GB")
+        print(f"Available RAM: {available_gb:.2f} GB")
+        
+        if required_gb > available_gb * 0.8:  # Keep 20% buffer
+            raise MemoryError(
+                f"Not enough RAM! Need {required_gb:.2f} GB, "
+                f"have {available_gb:.2f} GB available"
+            )
+        
+        print("Loading into RAM...")
+        data = dset[:]
+        print("Load complete!")
+        
+    return data
+
+# @nb.njit(parallel=True, fastmath=True)
+# def sqeuclidean_distances_numba(point, dataset):
+#     """
+#     Blazingly fast squared Euclidean distances
+#     """
+#     n_samples = dataset.shape[0]
+#     n_features = dataset.shape[1]
+#     distances = np.empty(n_samples, dtype=np.float32)
     
-    return distances
-
-
-def compute_distances_batched_indexed(query_vec, dataset, indices_np, batch_size=100000):
-    """Compute distances to specific indices in the dataset."""
-    n = len(indices_np)
-    distances = cp.empty(n, dtype=cp.float32)
-    for start in tqdm(range(0, n, batch_size)):
-        end = min(start + batch_size, n)
-        batch_indices = indices_np[start:end]
-        batch = cp.array(dataset[batch_indices], dtype=cp.float32)
-        distances[start:end] = cdist(query_vec, batch, metric='sqeuclidean')[0]
-    return distances
-
-
-def billionRobustPrune(source, dataset, batch_size=100000):
-    n = dataset.shape[0]
-    source_vec = cp.array(dataset[source:source+1], dtype=cp.float32)
-    dist_from_source = compute_distances_batched(source_vec, dataset, batch_size)
-    active = cp.ones(n, dtype=cp.bool_)
-    active[source] = False
-    edges = [source]
-    while cp.any(active):
-        print(f"{cp.sum(active):,} left")
-        masked_dist = cp.where(active, dist_from_source, cp.inf)
-        waypoint = cp.argmin(masked_dist).item()
-        edges.append(waypoint)
-        active[waypoint] = False
-        # Get indices of active points and convert to NumPy for h5py indexing
-        active_indices = cp.where(active)[0]
-        active_indices_np = active_indices.get()
-        
-        waypoint_vec = cp.array(dataset[waypoint:waypoint+1], dtype=cp.float32)
-        # Compute distances only to active points (batched)
-        dist_from_waypoint_active = compute_distances_batched_indexed(
-            waypoint_vec, dataset, active_indices_np, batch_size
-        )
-        # Map distances back to original indices
-        prune_mask_active = dist_from_waypoint_active < dist_from_source[active_indices]
-        
-        # Update active array using the active indices
-        prune_indices = active_indices[prune_mask_active]
-        active[prune_indices] = False
-    return edges
-'''
-
-def compute_distances_batched(query_vec, dataset, batch_size=100000):
-    n = dataset.shape[0]
-    distances = np.empty(n, dtype=np.float32)
-    for start in tqdm(range(0, n, batch_size)):
-        end = min(start + batch_size, n)
-        batch = np.array(dataset[start:end], dtype=np.float32)
-        distances[start:end] = npcdist(query_vec, batch, metric='sqeuclidean')[0]
-    return distances
-
-def compute_distances_batched_indexed(query_vec, dataset, indices_np, batch_size=100000):
-    """Compute distances to specific indices in the dataset."""
-    n = len(indices_np)
-    distances = np.empty(n, dtype=np.float32)
-    for start in tqdm(range(0, n, batch_size)):
-        end = min(start + batch_size, n)
-        batch_indices = indices_np[start:end]
-        batch = np.array(dataset[batch_indices], dtype=np.float32)
-        distances[start:end] = npcdist(query_vec, batch, metric='sqeuclidean')[0]
-    return distances
-
-
-def billionRobustPrune(source, dataset, batch_size=100000):
-    n = dataset.shape[0]
-    source_vec = np.array(dataset[source:source+1], dtype=np.float32)
-    dist_from_source = compute_distances_batched(source_vec, dataset, batch_size)
+#     for i in nb.prange(n_samples):
+#         dist = 0.0
+#         for j in range(n_features):
+#             diff = dataset[i, j] - point[j]
+#             dist += diff * diff
+#         distances[i] = dist
     
-    active = np.ones(n, dtype=np.bool_)
-    active[source] = False
-    edges = [source]
-    
-    while np.any(active):
-        print(f"{np.sum(active):,} left")
-        masked_dist = np.where(active, dist_from_source, np.inf)
-        waypoint = np.argmin(masked_dist).item()
-        edges.append(waypoint)
-        active[waypoint] = False
-        
-        # Get indices of active points
-        active_indices = np.where(active)[0]
-        
-        waypoint_vec = np.array(dataset[waypoint:waypoint+1], dtype=np.float32)
-        # Compute distances only to active points (batched)
-        dist_from_waypoint_active = compute_distances_batched_indexed(
-            waypoint_vec, dataset, active_indices, batch_size
-        )
-        
-        # Map distances back to original indices
-        prune_mask_active = dist_from_waypoint_active < dist_from_source[active_indices]
-        
-        # Update active array using the active indices
-        prune_indices = active_indices[prune_mask_active]
-        active[prune_indices] = False
-    
-    return edges
+#     return distances
 
-
-# def billionRobustPrune(source, dataset, batch_size=100000):
+# def cpu_memEfficientRobustPrune(source, dataset):
 #     n = dataset.shape[0]
-    
-#     source_vec = cp.array(dataset[source:source+1], dtype=cp.float32)
-#     dist_from_source = compute_distances_batched(source_vec, dataset, batch_size)
-    
-#     active = cp.ones(n, dtype=cp.bool_)
+#     dist_from_source = sqeuclidean_distances_numba(dataset[source], dataset)
+#     # dist_from_source = npcdist(dataset[source], dataset, metric='sqeuclidean').flatten()
+
+#     active = np.ones(n, dtype=np.bool_)
 #     active[source] = False
-#     edges = [source]
     
-#     while cp.any(active):
-#         print(f"{cp.sum(active):,} left")
-#         masked_dist = cp.where(active, dist_from_source, cp.inf)
-#         waypoint = cp.argmin(masked_dist).item()
+#     edges = [source]
+
+#     while np.any(active):
+#         print(f"Degree: {len(edges) - 1}, Left: {np.sum(active)}")
+#         masked_dist = np.where(active, dist_from_source, np.inf)
+#         waypoint = np.argmin(masked_dist).item()
+
 #         edges.append(waypoint)
 #         active[waypoint] = False
         
-#         waypoint_vec = cp.array(dataset[waypoint:waypoint+1], dtype=cp.float32)
-#         dist_from_waypoint = compute_distances_batched(waypoint_vec, dataset, batch_size)
-        
-#         prune_mask = (dist_from_waypoint < dist_from_source) & active
+#         # print(active.shape, dist_from_source.shape)
+
+#         prune_mask = (sqeuclidean_distances_numba(dataset[waypoint], dataset) < dist_from_source) & active
 #         active[prune_mask] = False
-    
+
 #     return edges
+
+@nb.njit(parallel=True, fastmath=True)
+def sqeuclidean_distances_numba(point, dataset):
+    """Blazingly fast squared Euclidean distances"""
+    n_samples = dataset.shape[0]
+    n_features = dataset.shape[1]
+    distances = np.empty(n_samples, dtype=np.float32)
+    
+    for i in nb.prange(n_samples):
+        dist = 0.0
+        for j in range(n_features):
+            diff = dataset[i, j] - point[j]
+            dist += diff * diff
+        distances[i] = dist
+    
+    return distances
+
+@nb.njit(parallel=True, fastmath=True)
+def sqeuclidean_distances_numba_inplace(point, dataset, out):
+    """Compute distances in-place to avoid allocation"""
+    n_samples = dataset.shape[0]
+    n_features = dataset.shape[1]
+    
+    for i in nb.prange(n_samples):
+        dist = 0.0
+        for j in range(n_features):
+            diff = dataset[i, j] - point[j]
+            dist += diff * diff
+        out[i] = dist
+
+def cpu_memEfficientRobustPrune(source, dataset):
+    n = dataset.shape[0]
+    
+    # Use float32 for all distance arrays (half memory vs float64)
+    dist_from_source = sqeuclidean_distances_numba(dataset[source], dataset)
+    
+    # Use uint8 for boolean mask (1 byte vs 8 bytes per element)
+    active = np.ones(n, dtype=np.uint8)
+    active[source] = 0
+    
+    # Pre-allocate arrays to avoid repeated allocations
+    edges = np.empty(n, dtype=np.int32)  # Use int32 instead of Python list
+    edges[0] = source
+    edge_count = 1
+    
+    # Pre-allocate distance buffer (reuse for each waypoint)
+    dist_buffer = np.empty(n, dtype=np.float32)
+    
+    # Track active count to avoid np.sum calls
+    active_count = n - 1
+    
+    while active_count > 0:
+        print(f"Degree: {edge_count - 1}, Left: {active_count}")
+        
+        # Find minimum among active points (avoid np.where with np.inf)
+        active_indices = np.flatnonzero(active)
+        waypoint = active_indices[dist_from_source[active_indices].argmin()]
+        
+        edges[edge_count] = waypoint
+        edge_count += 1
+        
+        active[waypoint] = 0
+        active_count -= 1
+        
+        if active_count == 0:
+            break
+        
+        # Reuse pre-allocated buffer instead of creating new array
+        sqeuclidean_distances_numba_inplace(dataset[waypoint], dataset, dist_buffer)
+        
+        # Prune in-place
+        prune_mask = (dist_buffer < dist_from_source) & active.astype(np.bool_)
+        prune_count = np.count_nonzero(prune_mask)
+        
+        if prune_count > 0:
+            active[prune_mask] = 0
+            active_count -= prune_count
+    
+    return edges[:edge_count].tolist()
 
 def angularRobustPrune(source, dataset):
     n = dataset.shape[0]
@@ -364,22 +374,11 @@ def jaccardRobustPrune(source, dataset):
 
     return edges
 
-
 def memBuildRobustPruneGraph(dataset):
     n = dataset.shape[0]
     edgeSet = []
 
     for source in tqdm(range(n)):
-        edges = memEfficientRobustPrune(source, dataset)
-        edgeSet.append(edges)
-
-    return edgeSet
-
-def smallSampleBuildRobustPruneGraph(dataset, points):
-    n = dataset.shape[0]
-    edgeSet = []
-
-    for source in points:
         edges = memEfficientRobustPrune(source, dataset)
         edgeSet.append(edges)
 
@@ -406,6 +405,66 @@ def buildRobustPruneGraph(permutation_matrix):
     return edgeSet
 
 ########################
+
+########################
+# BILLION SCALE ON GPU #
+########################
+def compute_distances_batched_GPU(query_vec, dataset, batch_size=100000):
+    n = dataset.shape[0]
+    distances = cp.empty(n, dtype=cp.float32)
+    
+    for start in tqdm(range(0, n, batch_size)):
+        end = min(start + batch_size, n)
+        batch = cp.array(dataset[start:end], dtype=cp.float32)
+        distances[start:end] = cdist(query_vec, batch, metric='sqeuclidean')[0]
+    
+    return distances
+
+
+def compute_distances_batched_indexed_GPU(query_vec, dataset, indices_np, batch_size=100000):
+    """Compute distances to specific indices in the dataset."""
+    n = len(indices_np)
+    distances = cp.empty(n, dtype=cp.float32)
+    for start in tqdm(range(0, n, batch_size)):
+        end = min(start + batch_size, n)
+        batch_indices = indices_np[start:end]
+        batch = cp.array(dataset[batch_indices], dtype=cp.float32)
+        distances[start:end] = cdist(query_vec, batch, metric='sqeuclidean')[0]
+    return distances
+
+
+def billionRobustPrune_GPU(source, dataset, batch_size=100000):
+    n = dataset.shape[0]
+    source_vec = cp.array(dataset[source:source+1], dtype=cp.float32)
+    dist_from_source = compute_distances_batched(source_vec, dataset, batch_size)
+    active = cp.ones(n, dtype=cp.bool_)
+    active[source] = False
+    edges = [source]
+    while cp.any(active):
+        print(f"{cp.sum(active):,} left")
+        masked_dist = cp.where(active, dist_from_source, cp.inf)
+        waypoint = cp.argmin(masked_dist).item()
+        edges.append(waypoint)
+        active[waypoint] = False
+        # Get indices of active points and convert to NumPy for h5py indexing
+        active_indices = cp.where(active)[0]
+        active_indices_np = active_indices.get()
+        
+        waypoint_vec = cp.array(dataset[waypoint:waypoint+1], dtype=cp.float32)
+        # Compute distances only to active points (batched)
+        dist_from_waypoint_active = compute_distances_batched_indexed(
+            waypoint_vec, dataset, active_indices_np, batch_size
+        )
+        # Map distances back to original indices
+        prune_mask_active = dist_from_waypoint_active < dist_from_source[active_indices]
+        
+        # Update active array using the active indices
+        prune_indices = active_indices[prune_mask_active]
+        active[prune_indices] = False
+    return edges
+
+################################
+
 
 ################################
 ### HYBRID SET COVER METHODS ###
@@ -522,14 +581,6 @@ def buildHybridSetCoverWithBetterFriends(dataset, k, v):
         edgeSet.append(sourceEdges)
 
     return edgeSet
-
-def computeDistances(X, Y, metric):
-    if metric in ['euclidean', 'jaccard']:
-        return cdist(X, Y, metric=metric)
-    elif metric == 'angular':
-        return cp.arccos(cp.clip(1 - cdist(X, Y, metric='cosine'), -1, 1))
-    else:
-        return None
 
 ### CHUNKING FOR MEMORY EFFICIENT ROBUST PRUNE ###
 
