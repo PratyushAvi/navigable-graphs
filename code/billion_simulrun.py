@@ -14,13 +14,14 @@ def main():
     BINARY_FILE = "/scratch/pa2439/Projects/ANN-Search/datasets/SPACEV1B/vectors_int.mmap"
     SQ_NORMS_FILE = "/scratch/pa2439/Projects/ANN-Search/datasets/SPACEV1B/sq_vector_norms.mmap"
     dataset_shape = np.load("/scratch/pa2439/Projects/ANN-Search/datasets/SPACEV1B/vectors_shape.npy")
+    MEMPOINT =  10 ** 8
 
     # X = np.memmap(BINARY_FILE, mode='r', dtype='float32', shape=dataset_shape)
     X = np.memmap(BINARY_FILE, mode='r', dtype='int8', shape=dataset_shape)
     print("Loaded vectors:", X.shape, flush=True)
 
-    sq_norms = np.memmap(SQ_NORMS_FILE, mode='r', dtype='float32', shape=X.shape[0])
-    print("Loaded squared norms", flush=True)
+    # sq_norms = np.memmap(SQ_NORMS_FILE, mode='r', dtype='float32', shape=X.shape[0])
+    # print("Loaded squared norms", flush=True)
 
     metric = 'euclidean'
 
@@ -39,27 +40,44 @@ def main():
 
             edges = [source]
 
-            active = np.ones(X.shape[0], dtype=np.uint8)
+            active = np.zeros(X.shape[0], dtype=np.uint8)
             active[source] = 0
+
             
             print(f"Computing pairwise distances from {source}", flush=True)
             start = time()
             dist_from_source = -2 * (X @ X[source]) + (X[source] @ X[source])
+            # dist_from_source = -2 * (X @ X[source]) + sq_norms[source]
             print(f"Took {time() - start} seconds to compute pairwise distances", flush=True)
 
             start = time()
-            while np.sum(active) > 0:
-                print(f"Degree: {len(edges) - 1}, Left: {np.sum(active)}", flush=True)
+            while np.sum(active) > MEMPOINT:
+                matvectime = time()
                 masked_dist = np.where(active > 0, dist_from_source, np.inf)
                 waypoint = np.argmin(masked_dist)
                 active[waypoint] = 0
                 edges.append(waypoint)
 
                 dist_from_waypoint = -2 * (X @ X[waypoint]) + (X[waypoint] @ X[waypoint])
-
-                # prune_mask = dist_from_waypoint < dist_from_source
                 active[dist_from_waypoint < dist_from_source] = 0
-                # active[prune_mask] = 0
+                print(f"Degree: {len(edges) - 1}, Left: {np.sum(active)}, Took: {time() - matvectime}", flush=True)
+            
+            # active_indices = active[active > 0]
+            # X_inmem = X[active_indices]
+            # dist_inmem = dist_from_source[active_indices]
+            # active_inmem = active[active_indices]
+            # print(f"moving into memory..., {len(active_indices)}, {active_inmem.shape}, {X_inmem.shape}, {active_inmem[0]}", flush=True)
+
+            # while np.sum(active_inmem) > 0:
+            #     matvectime = time()
+            #     masked_dist = np.where(active_inmem > 0, dist_inmem, np.inf)
+            #     waypoint = np.argmin(masked_dist)
+            #     active_inmem[waypoint] = 0
+            #     edges.append(waypoint)
+
+            #     dist_from_waypoint = -2 * (X_inmem @ X_inmem[waypoint]) + (X_inmem[waypoint] @ X_inmem[waypoint])
+            #     active_inmem[dist_from_waypoint < dist_inmem] = 0
+            #     print(f"Degree: {len(edges) - 1}, Left: {np.sum(active_inmem)}, Took: {time() - matvectime}", flush=True)
 
             ######################################
 
@@ -94,7 +112,7 @@ def compute_sq_norms(X_memmap, memory_factor=0.8):
     print(f"Using chunk size: {chunk_size} vectors")
 
     # Initialize result array
-    sq_norms = np.empty(N, dtype=np.float32)
+    sq_norms = np.empty(N, dtype=np.int16)
 
     # Process data in chunks
     for start in range(0, N, chunk_size):
@@ -103,7 +121,7 @@ def compute_sq_norms(X_memmap, memory_factor=0.8):
         X_chunk = X_memmap[start:end] 
         
         # Vectorized squaring and summation
-        sq_norms_chunk = np.sum(X_chunk * X_chunk, axis=1, dtype=np.float32)
+        sq_norms_chunk = np.sum(X_chunk * X_chunk, axis=1, dtype=np.int16)
         
         sq_norms[start:end] = sq_norms_chunk
 
