@@ -19,11 +19,12 @@ def main():
     parser.add_argument("--num_points", type=int, default=10_000)
     parser.add_argument("--batch", type=int, default=50)
     parser.add_argument("--num_shards", type=int, default=17)
+    parser.add_argument("--cpus", type=int, default=16)
     args = parser.parse_args()
 
-    ray.init(address="auto", runtime_env={"env_vars": {"OMP_NUM_THREADS": "16", "OPENBLAS_NUM_THREADS": "16"}})
+    ray.init(address="auto", runtime_env={"env_vars": {"OMP_NUM_THREADS": str(args.cpus), "OPENBLAS_NUM_THREADS": str(args.cpus)}})
 
-    expected_cpus = args.num_shards * 16
+    expected_cpus = args.num_shards * args.cpus
     print(f"Waiting for {args.num_shards} workers ({expected_cpus} CPUs)...", flush=True)
     while True:
         available = ray.cluster_resources().get("CPU", 0)
@@ -33,9 +34,9 @@ def main():
         time.sleep(15)
     print("All workers ready.", flush=True)
 
-    workers = [WorkerActor.remote(i, args.data) for i in range(args.num_shards)]
+    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards) for i in range(args.num_shards)]
 
-    coordinator = CoordinatorActor.remote(
+    coordinator = CoordinatorActor.options(num_cpus=args.cpus).remote(
         EFS_PATH=args.data,
         num_points=args.num_points,
         batch=args.batch,
@@ -210,13 +211,14 @@ class Coordinator:
 # ---------------------------------------------------------------------------
 
 class Worker:
-    def __init__(self, shard_id, EFS_PATH):
+    def __init__(self, shard_id, EFS_PATH, num_shards):
         self.id       = shard_id
         self.EFS_PATH = EFS_PATH
 
-        allocations  = np.load(f"{self.EFS_PATH}/shards.npy")
-        self.start   = int(allocations[self.id][0])
-        self.end     = int(allocations[self.id][1])
+        total        = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
+        shard_size   = total // num_shards
+        self.start   = shard_id * shard_size
+        self.end     = total if shard_id == num_shards - 1 else (shard_id + 1) * shard_size
 
         # Load shard slice into X then close mmaps
         dataset = np.load(f"{self.EFS_PATH}/vectors.npy",  mmap_mode='r')
@@ -350,12 +352,12 @@ class Worker:
 # Ray actors
 # ---------------------------------------------------------------------------
 
-@ray.remote(num_cpus=16)
+@ray.remote
 class WorkerActor(Worker):
     pass
 
 
-@ray.remote(num_cpus=16)
+@ray.remote
 class CoordinatorActor(Coordinator):
     def __init__(self, EFS_PATH, num_points, batch, workers):
         self.workers = workers
