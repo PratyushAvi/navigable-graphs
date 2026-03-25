@@ -10,25 +10,39 @@ from heapq import heappush
 import ray
 
 def main():
+    import argparse
     import os
     os.environ["OMP_NUM_THREADS"] = "16"
-    ray.init(runtime_env={"env_vars": {"OMP_NUM_THREADS": "16", "OPENBLAS_NUM_THREADS": "16"}})
 
-    num_shards = 17
-    EFS_PATH = "/mnt/efs/dataset"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", required=True, help="Path to dataset directory")
+    parser.add_argument("--num_points", type=int, default=10_000)
+    parser.add_argument("--batch", type=int, default=50)
+    parser.add_argument("--num_shards", type=int, default=17)
+    args = parser.parse_args()
 
-    workers = [WorkerActor.remote(i, EFS_PATH) for i in range(num_shards)]
+    ray.init(address="auto", runtime_env={"env_vars": {"OMP_NUM_THREADS": "16", "OPENBLAS_NUM_THREADS": "16"}})
+
+    expected_cpus = args.num_shards * 16
+    print(f"Waiting for {args.num_shards} workers ({expected_cpus} CPUs)...", flush=True)
+    while True:
+        available = ray.cluster_resources().get("CPU", 0)
+        print(f"  CPUs available: {available:.0f}/{expected_cpus}", flush=True)
+        if available >= expected_cpus:
+            break
+        time.sleep(15)
+    print("All workers ready.", flush=True)
+
+    workers = [WorkerActor.remote(i, args.data) for i in range(args.num_shards)]
 
     coordinator = CoordinatorActor.remote(
-        EFS_PATH=EFS_PATH,
-        num_points=10_000,
-        batch=50,
+        EFS_PATH=args.data,
+        num_points=args.num_points,
+        batch=args.batch,
         workers=workers
     )
 
     ray.get(coordinator.computeNeighborhoods.remote())
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -37,13 +51,6 @@ def main():
 
 class Coordinator:
     def __init__(self, EFS_PATH, num_points, batch):
-        import os, subprocess
-        if not os.path.exists(EFS_PATH):
-            subprocess.run(
-                ["sudo", "mount", "-t", "efs", "-o", "tls", "fs-0a97890c01f980fb1:/", "/mnt/efs"],
-                check=True
-            )
-
         self.EFS_PATH   = EFS_PATH
         self.num_points = num_points
         self.batch      = batch
@@ -204,13 +211,6 @@ class Coordinator:
 
 class Worker:
     def __init__(self, shard_id, EFS_PATH):
-        import os, subprocess
-        if not os.path.exists(EFS_PATH):
-            subprocess.run(
-                ["sudo", "mount", "-t", "efs", "-o", "tls", "fs-0a97890c01f980fb1:/", "/mnt/efs"],
-                check=True
-            )
-
         self.id       = shard_id
         self.EFS_PATH = EFS_PATH
 
