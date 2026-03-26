@@ -17,22 +17,34 @@ class Worker:
     def __init__(self, worker_id, EFS_PATH, num_shards):
         self.id       = worker_id
         self.EFS_PATH = EFS_PATH
+        print(f"[Worker {worker_id}] init start", flush=True)
 
-        total        = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
+        t0    = time.time()
+        total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
+        print(f"[Worker {worker_id}] shape check: {time.time()-t0:.2f}s  total={total:,}", flush=True)
+
         shard_size   = total // num_shards
         self.start   = worker_id * shard_size
         self.end     = total if worker_id == num_shards - 1 else (worker_id + 1) * shard_size
+        print(f"[Worker {worker_id}] shard [{self.start:,}, {self.end:,})  n={self.end-self.start:,}", flush=True)
 
         # Load shard slice into X then close mmaps
+        t1      = time.time()
         dataset = np.load(f"{self.EFS_PATH}/vectors.npy",  mmap_mode='r')
         norms   = np.load(f"{self.EFS_PATH}/sq_norms.npy", mmap_mode='r')
+        print(f"[Worker {worker_id}] mmap open: {time.time()-t1:.2f}s", flush=True)
 
         n        = self.end - self.start
         self.X   = np.empty((n, 102), dtype=np.float32)
+        t2       = time.time()
         self.X[:, :100] = dataset[self.start:self.end]
+        print(f"[Worker {worker_id}] vectors loaded: {time.time()-t2:.2f}s", flush=True)
+        t3       = time.time()
         self.X[:, 100]  = 1.0
         self.X[:, 101]  = norms[self.start:self.end]
+        print(f"[Worker {worker_id}] norms loaded: {time.time()-t3:.2f}s", flush=True)
         del dataset, norms
+        print(f"[Worker {worker_id}] init done: total={time.time()-t0:.2f}s", flush=True)
 
         self.n             = n
         self.active_ids    = {}
@@ -212,7 +224,7 @@ def main():
             all_results  = ray.get(futures)
             wall_time    = time.time() - wall_start
             compute_times = [r[1] for r in all_results]
-            print(f"{'INIT':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f} max, flush=True={np.max(compute_times):.4f}")
+            print(f"{'INIT':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f} max={np.max(compute_times):.4f}", flush=True)
 
             compute_vecs = [i + 1 for i in vec_ids]
             update_vecs  = dataset[compute_vecs].astype(np.float32)
@@ -224,7 +236,7 @@ def main():
             all_results  = ray.get(futures)
             wall_time    = time.time() - wall_start
             compute_times = [r[1] for r in all_results]
-            print(f"{'UPDATE':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f}, flush=True max={np.max(compute_times):.4f}")
+            print(f"{'UPDATE':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f} max={np.max(compute_times):.4f}", flush=True)
 
             inputs = [(i, 'KILL', None) for i in vec_ids]
 
