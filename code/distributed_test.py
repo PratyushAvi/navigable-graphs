@@ -15,9 +15,20 @@ import ray
 
 class Worker:
     def __init__(self, worker_id, EFS_PATH, num_shards):
+        import os, ctypes
+        os.environ["OMP_NUM_THREADS"]     = os.environ.get("OMP_NUM_THREADS", "16")
+        os.environ["OPENBLAS_NUM_THREADS"] = os.environ.get("OPENBLAS_NUM_THREADS", "16")
+        # Re-init OpenBLAS thread count after env vars are set
+        try:
+            ctypes.CDLL("libopenblas.so").openblas_set_num_threads(
+                int(os.environ["OMP_NUM_THREADS"])
+            )
+        except Exception:
+            pass
+
         self.id       = worker_id
         self.EFS_PATH = EFS_PATH
-        print(f"[Worker {worker_id}] init start", flush=True)
+        print(f"[Worker {worker_id}] init start  OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}", flush=True)
 
         t0    = time.time()
         total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
@@ -58,7 +69,6 @@ class Worker:
         return row
 
     def message(self, vecs, norms, vec_ids, inputs):
-        print(inputs, " received", flush=True)
         # Pass 1: INIT and KILL
         for vec_id, command, _ in inputs:
             if command == 'INIT':
@@ -107,7 +117,8 @@ class Worker:
             row = self.active_ids[vec_id]
             ui  = self.uncov_indices[row]
             if len(ui) > 0:
-                local_idx = int(np.argmin(self.dists_matrix[row][ui]))
+                row_dists = self.dists_matrix[row] if len(ui) == self.n else self.dists_matrix[row][ui]
+                local_idx = int(np.argmin(row_dists))
                 rv        = int(ui[local_idx])
                 dist      = float(self.dists_matrix[row][rv])
                 response.append((vec_id, rv + self.start, dist))
