@@ -46,6 +46,7 @@ class Worker:
         return row
 
     def message(self, vecs, norms, vec_ids, inputs):
+        print(inputs, " received", flush=True)
         # Pass 1: INIT and KILL
         for vec_id, command, _ in inputs:
             if command == 'INIT':
@@ -196,8 +197,8 @@ def main():
     batch_sizes = [50]
     num_trials  = 3
 
-    print(f"{'Operation':<12} {'Batch Size':<12} {'Trial':<8} {'Wall (s)':<14} {'Compute (s)':<14}")
-    print("-" * 62)
+    print(f"{'Operation':<12} {'Batch Size':<12} {'Trial':<8} {'Wall (s)':<14} {'Compute (s)':<14}", flush=True)
+    print("-" * 62, flush=True)
 
     for batch_size in batch_sizes:
         for trial in range(num_trials):
@@ -211,7 +212,7 @@ def main():
             all_results  = ray.get(futures)
             wall_time    = time.time() - wall_start
             compute_times = [r[1] for r in all_results]
-            print(f"{'INIT':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f} max={np.max(compute_times):.4f}")
+            print(f"{'INIT':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f} max, flush=True={np.max(compute_times):.4f}")
 
             compute_vecs = [i + 1 for i in vec_ids]
             update_vecs  = dataset[compute_vecs].astype(np.float32)
@@ -223,7 +224,7 @@ def main():
             all_results  = ray.get(futures)
             wall_time    = time.time() - wall_start
             compute_times = [r[1] for r in all_results]
-            print(f"{'UPDATE':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f} max={np.max(compute_times):.4f}")
+            print(f"{'UPDATE':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f} avg={np.mean(compute_times):.4f}, flush=True max={np.max(compute_times):.4f}")
 
             inputs = [(i, 'KILL', None) for i in vec_ids]
 
@@ -235,9 +236,9 @@ def main():
             ) for w in workers]
             ray.get(futures)
             wall_time = time.time() - wall_start
-            print(f"{'KILL':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f}")
+            print(f"{'KILL':<12} {batch_size:<12} {trial:<8} {wall_time:<14.4f}", flush=True)
 
-        print()
+        print("", flush=True)
 
 if __name__ == "__main__":
     main()
