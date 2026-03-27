@@ -82,7 +82,9 @@ class Coordinator:
         return True
 
     def computeNeighborhoods(self):
+        print("[Coordinator] computeNeighborhoods start", flush=True)
         self.active = set(int(v) for v in np.random.choice(self.vector_ids, self.batch, replace=False))
+        print(f"[Coordinator] initial batch sampled: {self.active}", flush=True)
         message           = []
         compute_distances = []
 
