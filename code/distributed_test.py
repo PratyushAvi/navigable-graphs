@@ -1,9 +1,6 @@
 # test.py
 
 import os
-os.environ["OMP_NUM_THREADS"] = "16"
-os.environ["OPENBLAS_NUM_THREADS"] = "16"
-
 import numpy as np
 import random
 import time
@@ -14,21 +11,18 @@ import ray
 # ---------------------------------------------------------------------------
 
 class Worker:
-    def __init__(self, worker_id, EFS_PATH, num_shards):
-        import os, ctypes
-        os.environ["OMP_NUM_THREADS"]     = os.environ.get("OMP_NUM_THREADS", "16")
-        os.environ["OPENBLAS_NUM_THREADS"] = os.environ.get("OPENBLAS_NUM_THREADS", "16")
-        # Re-init OpenBLAS thread count after env vars are set
+    def __init__(self, worker_id, EFS_PATH, num_shards, cpus):
+        import ctypes
+        os.environ["OMP_NUM_THREADS"]      = str(cpus)
+        os.environ["OPENBLAS_NUM_THREADS"] = str(cpus)
         try:
-            ctypes.CDLL("libopenblas.so").openblas_set_num_threads(
-                int(os.environ["OMP_NUM_THREADS"])
-            )
+            ctypes.CDLL("libopenblas.so").openblas_set_num_threads(cpus)
         except Exception:
             pass
 
         self.id       = worker_id
         self.EFS_PATH = EFS_PATH
-        print(f"[Worker {worker_id}] init start  OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}", flush=True)
+        print(f"[Worker {worker_id}] init start  OMP_NUM_THREADS={cpus}", flush=True)
 
         t0    = time.time()
         total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
@@ -212,7 +206,7 @@ def main():
         time.sleep(15)
     print("All workers ready.", flush=True)
 
-    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards)
+    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus)
                for i in range(args.num_workers)]
     dataset = np.load(f"{args.data}/vectors.npy",  mmap_mode='r')
     norms   = np.load(f"{args.data}/sq_norms.npy", mmap_mode='r')

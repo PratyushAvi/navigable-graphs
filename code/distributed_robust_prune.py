@@ -1,8 +1,3 @@
-import os
-os.environ["OMP_NUM_THREADS"] = "16"
-os.environ["OPENBLAS_NUM_THREADS"] = "16"
-
-
 import numpy as np
 import collections
 import time
@@ -11,8 +6,6 @@ import ray
 
 def main():
     import argparse
-    import os
-    os.environ["OMP_NUM_THREADS"] = "16"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True, help="Path to dataset directory")
@@ -34,14 +27,22 @@ def main():
         time.sleep(15)
     print("All workers ready.", flush=True)
 
-    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards) for i in range(args.num_shards)]
+    print(f"Creating {args.num_shards} worker actors...", flush=True)
+    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus) for i in range(args.num_shards)]
+    print("Waiting for workers to finish loading data...", flush=True)
+    ray.get([w.ready.remote() for w in workers])
+    print("All workers initialized.", flush=True)
 
+    print("Creating coordinator actor...", flush=True)
     coordinator = CoordinatorActor.options(num_cpus=args.cpus).remote(
         EFS_PATH=args.data,
         num_points=args.num_points,
         batch=args.batch,
         workers=workers
     )
+    print("Waiting for coordinator to initialize...", flush=True)
+    ray.get(coordinator.ready.remote())
+    print("Coordinator ready. Starting computation.", flush=True)
 
     ray.get(coordinator.computeNeighborhoods.remote())
 
@@ -75,6 +76,9 @@ class Coordinator:
                 self.computed.add(int(p.strip()))
 
         print(f"Resuming from {len(self.computed)} already computed neighborhoods.", flush=True)
+
+    def ready(self):
+        return True
 
     def computeNeighborhoods(self):
         self.active = set(int(v) for v in np.random.choice(self.vector_ids, self.batch, replace=False))
@@ -211,31 +215,54 @@ class Coordinator:
 # ---------------------------------------------------------------------------
 
 class Worker:
-    def __init__(self, shard_id, EFS_PATH, num_shards):
+    def __init__(self, shard_id, EFS_PATH, num_shards, cpus):
+        import os, ctypes
+        os.environ["OMP_NUM_THREADS"]      = str(cpus)
+        os.environ["OPENBLAS_NUM_THREADS"] = str(cpus)
+        try:
+            ctypes.CDLL("libopenblas.so").openblas_set_num_threads(cpus)
+        except Exception:
+            pass
+
         self.id       = shard_id
         self.EFS_PATH = EFS_PATH
+        print(f"[Worker {shard_id}] init start", flush=True)
 
-        total        = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
+        t0    = time.time()
+        total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
+        print(f"[Worker {shard_id}] shape check: {time.time()-t0:.2f}s  total={total:,}", flush=True)
+
         shard_size   = total // num_shards
         self.start   = shard_id * shard_size
         self.end     = total if shard_id == num_shards - 1 else (shard_id + 1) * shard_size
+        print(f"[Worker {shard_id}] shard [{self.start:,}, {self.end:,})  n={self.end-self.start:,}", flush=True)
 
         # Load shard slice into X then close mmaps
+        t1      = time.time()
         dataset = np.load(f"{self.EFS_PATH}/vectors.npy",  mmap_mode='r')
         norms   = np.load(f"{self.EFS_PATH}/sq_norms.npy", mmap_mode='r')
+        print(f"[Worker {shard_id}] mmap open: {time.time()-t1:.2f}s", flush=True)
 
-        n        = self.end - self.start
-        self.X   = np.empty((n, 102), dtype=np.float32)
+        n      = self.end - self.start
+        self.X = np.empty((n, 102), dtype=np.float32)
+        t2     = time.time()
         self.X[:, :100] = dataset[self.start:self.end]
+        print(f"[Worker {shard_id}] vectors loaded: {time.time()-t2:.2f}s", flush=True)
+        t3     = time.time()
         self.X[:, 100]  = 1.0
         self.X[:, 101]  = norms[self.start:self.end]
+        print(f"[Worker {shard_id}] norms loaded: {time.time()-t3:.2f}s", flush=True)
         del dataset, norms
+        print(f"[Worker {shard_id}] init done: total={time.time()-t0:.2f}s", flush=True)
 
         self.n             = n
         self.active_ids    = {}
         self.free_rows     = []
         self.dists_matrix  = None
         self.uncov_indices = {}   # row -> int32 array of uncovered local indices
+
+    def ready(self):
+        return True
 
     def _alloc_row(self, vec_id):
         row = self.free_rows.pop() if self.free_rows else len(self.active_ids)
@@ -290,7 +317,8 @@ class Worker:
             row = self.active_ids[vec_id]
             ui  = self.uncov_indices[row]
             if len(ui) > 0:
-                local_idx = int(np.argmin(self.dists_matrix[row][ui]))
+                row_dists = self.dists_matrix[row] if len(ui) == self.n else self.dists_matrix[row][ui]
+                local_idx = int(np.argmin(row_dists))
                 rv        = int(ui[local_idx])
                 dist      = float(self.dists_matrix[row][rv])
                 response.append((vec_id, rv + self.start, dist))
