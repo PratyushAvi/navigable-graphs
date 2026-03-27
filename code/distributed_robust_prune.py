@@ -28,13 +28,19 @@ def main():
         time.sleep(15)
     print("All workers ready.", flush=True)
 
-    print(f"Creating {args.num_shards} worker actors (staggered to avoid I/O contention)...", flush=True)
-    workers = []
-    for i in range(args.num_shards):
-        w = WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus)
-        ray.get(w.ready.remote())
-        print(f"  Worker {i} ready.", flush=True)
-        workers.append(w)
+    print(f"Creating {args.num_shards} worker actors...", flush=True)
+    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus)
+               for i in range(args.num_shards)]
+
+    pending = {w.ready.remote(): i for i, w in enumerate(workers)}
+    remaining = set(pending.keys())
+    while remaining:
+        done, remaining = ray.wait(list(remaining), num_returns=1, timeout=30)
+        for fut in done:
+            print(f"  Worker {pending[fut]} ready.", flush=True)
+        if remaining:
+            still_waiting = sorted(pending[f] for f in remaining)
+            print(f"  Still waiting on workers: {still_waiting}", flush=True)
     print("All workers initialized.", flush=True)
 
     print("Creating coordinator actor...", flush=True)
@@ -225,10 +231,15 @@ class Worker:
         import os, ctypes
         os.environ["OMP_NUM_THREADS"]      = str(cpus)
         os.environ["OPENBLAS_NUM_THREADS"] = str(cpus)
+        actual_threads = None
         try:
-            ctypes.CDLL("libopenblas.so").openblas_set_num_threads(cpus)
-        except Exception:
-            pass
+            lib = ctypes.CDLL("libopenblas.so")
+            lib.openblas_set_num_threads(cpus)
+            actual_threads = lib.openblas_get_num_threads()
+        except Exception as e:
+            print(f"[Worker {shard_id}] OpenBLAS ctypes error: {e}", flush=True)
+        print(f"[Worker {shard_id}] OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}  "
+              f"openblas_threads={actual_threads}  os.cpu_count()={os.cpu_count()}", flush=True)
 
         self.id       = shard_id
         self.EFS_PATH = EFS_PATH
