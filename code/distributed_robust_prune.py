@@ -28,10 +28,13 @@ def main():
         time.sleep(15)
     print("All workers ready.", flush=True)
 
-    print(f"Creating {args.num_shards} worker actors...", flush=True)
-    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus) for i in range(args.num_shards)]
-    print("Waiting for workers to finish loading data...", flush=True)
-    ray.get([w.ready.remote() for w in workers])
+    print(f"Creating {args.num_shards} worker actors (staggered to avoid I/O contention)...", flush=True)
+    workers = []
+    for i in range(args.num_shards):
+        w = WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus)
+        ray.get(w.ready.remote())
+        print(f"  Worker {i} ready.", flush=True)
+        workers.append(w)
     print("All workers initialized.", flush=True)
 
     print("Creating coordinator actor...", flush=True)
