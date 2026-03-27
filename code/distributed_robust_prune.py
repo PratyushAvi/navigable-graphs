@@ -13,11 +13,12 @@ def main():
     parser.add_argument("--batch", type=int, default=50)
     parser.add_argument("--num_shards", type=int, default=17)
     parser.add_argument("--cpus", type=int, default=16)
+    parser.add_argument("--coordinator_cpus", type=int, default=1)
     args = parser.parse_args()
 
     ray.init(address="auto", runtime_env={"env_vars": {"OMP_NUM_THREADS": str(args.cpus), "OPENBLAS_NUM_THREADS": str(args.cpus)}})
 
-    expected_cpus = args.num_shards * args.cpus
+    expected_cpus = args.num_shards * args.cpus + args.coordinator_cpus
     print(f"Waiting for {args.num_shards} workers ({expected_cpus} CPUs)...", flush=True)
     while True:
         available = ray.cluster_resources().get("CPU", 0)
@@ -34,7 +35,7 @@ def main():
     print("All workers initialized.", flush=True)
 
     print("Creating coordinator actor...", flush=True)
-    coordinator = CoordinatorActor.options(num_cpus=args.cpus).remote(
+    coordinator = CoordinatorActor.options(num_cpus=args.coordinator_cpus).remote(
         EFS_PATH=args.data,
         num_points=args.num_points,
         batch=args.batch,
