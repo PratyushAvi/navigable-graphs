@@ -11,7 +11,7 @@ import ray
 # ---------------------------------------------------------------------------
 
 class Worker:
-    def __init__(self, worker_id, EFS_PATH, cpus):
+    def __init__(self, worker_id, EFS_PATH, num_shards, cpus):
         import ctypes
         os.environ["OMP_NUM_THREADS"]      = str(cpus)
         os.environ["OPENBLAS_NUM_THREADS"] = str(cpus)
@@ -24,25 +24,29 @@ class Worker:
         self.EFS_PATH = EFS_PATH
         print(f"[Worker {worker_id}] init start  OMP_NUM_THREADS={cpus}", flush=True)
 
-        t0           = time.time()
-        boundaries   = np.load(f"{self.EFS_PATH}/shard_boundaries.npy")
-        self.start   = int(boundaries[worker_id][0])
-        self.end     = int(boundaries[worker_id][1])
-        n            = self.end - self.start
-        print(f"[Worker {worker_id}] shard [{self.start:,}, {self.end:,})  n={n:,}", flush=True)
+        t0    = time.time()
+        total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
+        print(f"[Worker {worker_id}] shape check: {time.time()-t0:.2f}s  total={total:,}", flush=True)
 
+        shard_size   = total // num_shards
+        self.start   = worker_id * shard_size
+        self.end     = total if worker_id == num_shards - 1 else (worker_id + 1) * shard_size
+        print(f"[Worker {worker_id}] shard [{self.start:,}, {self.end:,})  n={self.end-self.start:,}", flush=True)
+
+        # Load shard slice into X then close mmaps
         t1      = time.time()
-        dataset = np.load(f"{self.EFS_PATH}/vectors_shard_{worker_id}.npy",  mmap_mode='r')
-        norms   = np.load(f"{self.EFS_PATH}/sq_norms_shard_{worker_id}.npy", mmap_mode='r')
+        dataset = np.load(f"{self.EFS_PATH}/vectors.npy",  mmap_mode='r')
+        norms   = np.load(f"{self.EFS_PATH}/sq_norms.npy", mmap_mode='r')
         print(f"[Worker {worker_id}] mmap open: {time.time()-t1:.2f}s", flush=True)
 
+        n        = self.end - self.start
         self.X   = np.empty((n, 102), dtype=np.float32)
         t2       = time.time()
-        self.X[:, :100] = dataset[:]
+        self.X[:, :100] = dataset[self.start:self.end]
         print(f"[Worker {worker_id}] vectors loaded: {time.time()-t2:.2f}s", flush=True)
         t3       = time.time()
         self.X[:, 100]  = 1.0
-        self.X[:, 101]  = norms[:]
+        self.X[:, 101]  = norms[self.start:self.end]
         print(f"[Worker {worker_id}] norms loaded: {time.time()-t3:.2f}s", flush=True)
         del dataset, norms
         print(f"[Worker {worker_id}] init done: total={time.time()-t0:.2f}s", flush=True)
@@ -202,7 +206,7 @@ def main():
         time.sleep(15)
     print("All workers ready.", flush=True)
 
-    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.cpus)
+    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus)
                for i in range(args.num_workers)]
     dataset = np.load(f"{args.data}/vectors.npy",  mmap_mode='r')
     norms   = np.load(f"{args.data}/sq_norms.npy", mmap_mode='r')

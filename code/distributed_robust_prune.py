@@ -31,7 +31,7 @@ def main():
     print(f"Creating {args.num_shards} worker actors (staggered to avoid I/O contention)...", flush=True)
     workers = []
     for i in range(args.num_shards):
-        w = WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.cpus)
+        w = WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus)
         ray.get(w.ready.remote())
         print(f"  Worker {i} ready.", flush=True)
         workers.append(w)
@@ -221,7 +221,7 @@ class Coordinator:
 # ---------------------------------------------------------------------------
 
 class Worker:
-    def __init__(self, shard_id, EFS_PATH, cpus):
+    def __init__(self, shard_id, EFS_PATH, num_shards, cpus):
         import os, ctypes
         os.environ["OMP_NUM_THREADS"]      = str(cpus)
         os.environ["OPENBLAS_NUM_THREADS"] = str(cpus)
@@ -234,25 +234,29 @@ class Worker:
         self.EFS_PATH = EFS_PATH
         print(f"[Worker {shard_id}] init start", flush=True)
 
-        t0 = time.time()
-        boundaries   = np.load(f"{self.EFS_PATH}/shard_boundaries.npy")
-        self.start   = int(boundaries[shard_id][0])
-        self.end     = int(boundaries[shard_id][1])
-        n            = self.end - self.start
-        print(f"[Worker {shard_id}] shard [{self.start:,}, {self.end:,})  n={n:,}", flush=True)
+        t0    = time.time()
+        total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
+        print(f"[Worker {shard_id}] shape check: {time.time()-t0:.2f}s  total={total:,}", flush=True)
 
+        shard_size   = total // num_shards
+        self.start   = shard_id * shard_size
+        self.end     = total if shard_id == num_shards - 1 else (shard_id + 1) * shard_size
+        print(f"[Worker {shard_id}] shard [{self.start:,}, {self.end:,})  n={self.end-self.start:,}", flush=True)
+
+        # Load shard slice into X then close mmaps
         t1      = time.time()
-        dataset = np.load(f"{self.EFS_PATH}/vectors_shard_{shard_id}.npy",   mmap_mode='r')
-        norms   = np.load(f"{self.EFS_PATH}/sq_norms_shard_{shard_id}.npy",  mmap_mode='r')
+        dataset = np.load(f"{self.EFS_PATH}/vectors.npy",  mmap_mode='r')
+        norms   = np.load(f"{self.EFS_PATH}/sq_norms.npy", mmap_mode='r')
         print(f"[Worker {shard_id}] mmap open: {time.time()-t1:.2f}s", flush=True)
 
+        n      = self.end - self.start
         self.X = np.empty((n, 102), dtype=np.float32)
         t2     = time.time()
-        self.X[:, :100] = dataset[:]
+        self.X[:, :100] = dataset[self.start:self.end]
         print(f"[Worker {shard_id}] vectors loaded: {time.time()-t2:.2f}s", flush=True)
         t3     = time.time()
         self.X[:, 100]  = 1.0
-        self.X[:, 101]  = norms[:]
+        self.X[:, 101]  = norms[self.start:self.end]
         print(f"[Worker {shard_id}] norms loaded: {time.time()-t3:.2f}s", flush=True)
         del dataset, norms
         print(f"[Worker {shard_id}] init done: total={time.time()-t0:.2f}s", flush=True)
