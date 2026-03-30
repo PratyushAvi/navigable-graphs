@@ -228,18 +228,14 @@ class Coordinator:
 
 class Worker:
     def __init__(self, shard_id, EFS_PATH, num_shards, cpus):
-        import os, ctypes
+        import os
+        from threadpoolctl import threadpool_limits, threadpool_info
         os.environ["OMP_NUM_THREADS"]      = str(cpus)
         os.environ["OPENBLAS_NUM_THREADS"] = str(cpus)
-        actual_threads = None
-        try:
-            lib = ctypes.CDLL("libopenblas.so")
-            lib.openblas_set_num_threads(cpus)
-            actual_threads = lib.openblas_get_num_threads()
-        except Exception as e:
-            print(f"[Worker {shard_id}] OpenBLAS ctypes error: {e}", flush=True)
+        threadpool_limits(limits=cpus, user_api='blas')
+        info = threadpool_info()
         print(f"[Worker {shard_id}] OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}  "
-              f"openblas_threads={actual_threads}  os.cpu_count()={os.cpu_count()}", flush=True)
+              f"os.cpu_count()={os.cpu_count()}  threadpool={info}", flush=True)
 
         self.id       = shard_id
         self.EFS_PATH = EFS_PATH

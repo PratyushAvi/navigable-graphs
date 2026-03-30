@@ -180,6 +180,132 @@ def memEfficientRobustPrune(source, dataset):
 
     return edges
 
+##################################
+### BATCHED SINGLE-MACHINE PRUNE ###
+
+def precomputeAugMatrix(dataset):
+    """
+    Build the augmented dataset matrix for fast squared-Euclidean distances via matmul.
+
+    The identity  ||v - x||^2 = [-2v | ||v||^2 | 1] @ [x | 1 | ||x||^2]^T
+    lets a batch of B queries compute B×n squared distances with one (B, d+2)@(n, d+2).T
+    matmul — no cdist loop, full GPU tensor-core utilization.
+
+    Call once per dataset and pass the result to batchedEuclideanRobustPrune.
+    """
+    n, d = dataset.shape
+    data_f32 = dataset.astype(cp.float32)
+    sq_norms = cp.einsum('ij,ij->i', data_f32, data_f32)   # (n,)  avoids n×d temp
+    X_aug = cp.empty((n, d + 2), dtype=cp.float32)
+    X_aug[:, :d]  = data_f32
+    X_aug[:, d]   = 1.0
+    X_aug[:, d+1] = sq_norms
+    return X_aug
+
+
+def _query_aug(vecs, d):
+    """Build augmented query matrix: (k, d) → (k, d+2) for the matmul trick."""
+    sq = cp.einsum('ij,ij->i', vecs, vecs)   # (k,)
+    V = cp.empty((vecs.shape[0], d + 2), dtype=cp.float32)
+    V[:, :d]  = -2.0 * vecs
+    V[:, d]   = sq
+    V[:, d+1] = 1.0
+    return V
+
+
+def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_000):
+    """
+    Compute navigable-graph neighborhoods for a batch of source nodes in parallel.
+
+    Each round all active sources simultaneously:
+      1. Select their next edge via a single vectorized argmin across uncovered points.
+      2. Share a batched matmul to compute waypoint→uncovered distances.
+         When the union of uncovered sets across all active sources shrinks below
+         sparse_threshold, the matmul targets only that subset (|union| << n cols).
+      3. Update uncov_mask for every source at once.
+
+    Args:
+        sources:          list of int, source indices (length B).
+        dataset:          cp.ndarray (n, d), float32, already on GPU.
+        X_aug:            precomputeAugMatrix(dataset) result, shape (n, d+2).
+        sparse_threshold: switch to sub-matmul when union of uncovered < this size.
+
+    Returns:
+        list of B neighborhoods; each neighborhood is a list of
+        (neighbor_id: int, uncov_count: int) tuples, where uncov_count is the
+        size of the uncovered set at the moment that edge was chosen.
+    """
+    n, d = dataset.shape
+    B = len(sources)
+    sources_cp = cp.array(sources, dtype=cp.int64)
+
+    # INIT — one (B, n) matmul covers all sources at once
+    sv = dataset[sources_cp].astype(cp.float32)         # (B, d)
+    dists_matrix = _query_aug(sv, d) @ X_aug.T          # (B, n) squared euclidean
+    cp.maximum(dists_matrix, 0.0, out=dists_matrix)     # clamp floating-point noise
+
+    # uncov_mask[i, j] = True  iff  point j is still uncovered for source i
+    uncov_mask = cp.ones((B, n), dtype=cp.bool_)
+    uncov_mask[cp.arange(B), sources_cp] = False        # sources don't cover themselves
+
+    neighborhoods = [[] for _ in range(B)]
+    active = list(range(B))     # indices into [0, B) still running
+
+    while active:
+        act = cp.array(active, dtype=cp.int64)           # (k,)
+
+        # Gather rows for active sources (fancy index → copy, intentional)
+        act_uncov = uncov_mask[act]                      # (k, n)
+        act_dists = dists_matrix[act]                    # (k, n)
+
+        # Uncovered count before this edge is added
+        uncov_counts = cp.sum(act_uncov, axis=1).get()   # (k,) on CPU
+
+        # Vectorized waypoint selection: argmin over uncovered points for all active sources
+        masked = cp.where(act_uncov, act_dists, cp.inf)  # (k, n)
+        waypoints = cp.argmin(masked, axis=1)             # (k,)
+        waypoints_np = waypoints.get()
+
+        # Record (neighbor_id, uncov_count_when_chosen)
+        for li, gi in enumerate(active):
+            neighborhoods[gi].append((int(waypoints_np[li]), int(uncov_counts[li])))
+
+        # Mark chosen waypoints as covered in the local copy
+        act_uncov[cp.arange(len(active)), waypoints] = False
+
+        # Union of uncovered points across all active sources — drives sparse vs dense
+        union_mask = cp.any(act_uncov, axis=0)           # (n,)
+        union_size = int(cp.sum(union_mask))
+
+        if union_size > 0:
+            wp_vecs = dataset[waypoints].astype(cp.float32)   # (k, d)
+            W_aug   = _query_aug(wp_vecs, d)                  # (k, d+2)
+
+            if union_size < sparse_threshold:
+                # Sparse: matmul only against the uncovered subset of columns
+                u_idx = cp.where(union_mask)[0]               # (u,)
+                D_sub = W_aug @ X_aug[u_idx].T                # (k, u)
+                cp.maximum(D_sub, 0.0, out=D_sub)
+                prune = D_sub < act_dists[:, u_idx]           # (k, u)
+                sub   = act_uncov[:, u_idx]                   # (k, u) copy
+                act_uncov[:, u_idx] = sub & ~prune            # scatter back
+            else:
+                # Dense: full matmul (union too large to gain from sparsity)
+                D = W_aug @ X_aug.T                           # (k, n)
+                cp.maximum(D, 0.0, out=D)
+                act_uncov &= ~(D < act_dists)
+
+        # Write modified rows back into uncov_mask
+        uncov_mask[act] = act_uncov
+
+        # Drop sources whose uncovered set is now empty
+        still_active = cp.any(act_uncov, axis=1).get()   # (k,) bool
+        active = [gi for li, gi in enumerate(active) if still_active[li]]
+
+    return neighborhoods
+
+####################################
+
 def load_hdf5_safe(filepath, dataset_name='data'):
     """Load HDF5 with memory availability check"""
     

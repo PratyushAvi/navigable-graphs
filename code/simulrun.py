@@ -22,6 +22,13 @@ def main():
         default='default',
         help='Distance metric (e.g. euclidean, angular)'
     )
+    parser.add_argument(
+        '--batch_size',
+        type=int,
+        default=50,
+        help='Number of sources processed in parallel per GPU batch (euclidean only). '
+             'Each batch holds 2 * batch_size * n float32 values on the GPU; tune to fit VRAM.'
+    )
     args = parser.parse_args()
     DATASET = args.dataset # Get dataset name from argument
 
@@ -63,28 +70,46 @@ def main():
     
 
 
-    # pick specific function
+    adj_path      = f"{SAVEPATH}/adj-list-{DATASET}-{metric}.txt"
+    computed_path = f"{SAVEPATH}/{DATASET}-{metric}-computed.txt"
+
     if metric == 'euclidean':
-        buildGraph = memEfficientRobustPrune
+        # Precompute augmented dataset matrix once; amortised across all batches.
+        X_aug = precomputeAugMatrix(dataset)
+
+        pbar = tqdm(total=len(sources_to_process))
+        for i in range(0, len(sources_to_process), args.batch_size):
+            batch = sources_to_process[i : i + args.batch_size]
+            neighborhoods = batchedEuclideanRobustPrune(batch, dataset, X_aug)
+
+            # Write entire batch at once; a crash loses at most batch_size sources of work.
+            with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
+                for j, source in enumerate(batch):
+                    adj.write(f"{source} {neighborhoods[j]}\n")
+                    comp.write(f"{source}\n")
+
+            pbar.update(len(batch))
+        pbar.close()
+
     elif metric == 'angular':
-        buildGraph = angularRobustPrune
+        for source in tqdm(sources_to_process):
+            edges = angularRobustPrune(source, dataset)
+            with open(adj_path, 'a') as adj:
+                adj.write(','.join([str(e) for e in edges]) + '\n')
+            with open(computed_path, 'a') as f:
+                f.write(f"{source}\n")
+
     elif metric == 'jaccard':
-        buildGraph = jaccardRobustPrune
+        for source in tqdm(sources_to_process):
+            edges = jaccardRobustPrune(source, dataset)
+            with open(adj_path, 'a') as adj:
+                adj.write(','.join([str(e) for e in edges]) + '\n')
+            with open(computed_path, 'a') as f:
+                f.write(f"{source}\n")
+
     else:
         print('dunno')
         return
-
-    for source in tqdm(sources_to_process):
-        if source not in completed:
-
-            edges = buildGraph(source, dataset)
-
-            with open(f"{SAVEPATH}/adj-list-{DATASET}-{metric}.txt", 'a') as adj:
-                # FIX: Added closing parenthesis and newline character
-                adj.write(','.join([str(e) for e in edges]) + '\n')
-            
-            with open(f"{SAVEPATH}/{DATASET}-{metric}-computed.txt", 'a') as f:
-                f.write(f"{source}\n")
         
     print(f"Done with {DATASET}")
 
