@@ -40,11 +40,11 @@ def main():
     DATASET = args.dataset # Get dataset name from argument
 
     print("Building graph on", DATASET)
-    SAVEPATH = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/results"
+    SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
 
     DATASETS = dict()
     # Note: pd.read_csv returns a DataFrame; converting to a list of dicts first, then processing.
-    dataset_records = pd.read_csv("/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
+    dataset_records = pd.read_csv("/scratch/pa2439/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
     for d in dataset_records:
         DATASETS[d['name']] = d
 
