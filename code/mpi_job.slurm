@@ -8,7 +8,7 @@
 #SBATCH --job-name=nvgbl-mpi
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=pa2439@nyu.edu
-#SBATCH --output=slurm_out/slurm_%j.out
+#SBATCH --output=slurm_out/slurm_%j_rank%t.out
 #SBATCH --account=torch_pr_929_general
 
 SIF=/share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif
@@ -21,8 +21,8 @@ export OPENBLAS_NUM_THREADS=32
 srun $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
-    python /path/to/mpi4py_distributed_robust_prune.py \
-        --data /path/to/data \
+    python /scratch/pa2439/ANN-Search/navigable_graph_results/code/mpi4py_distributed_robust_prune.py \
+        --data $SCRATCH/ANN-Search/datasets/spacev1b \
         --num_points 10000 \
         --batch 50 \
         --num_shards 8 \
