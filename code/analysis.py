@@ -1,3 +1,4 @@
+import ast
 import glob
 import numpy as np
 import pandas as pd
@@ -15,14 +16,14 @@ def main():
     args = parser.parse_args()
     
     DATASETS = dict()
-    dataset_records = pd.read_csv("/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
+    dataset_records = pd.read_csv("/scratch/pa2439/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
     for d in dataset_records:
         DATASETS[d['name']] = d
-    SAVEPATH = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/results"
+    SAVEPATH = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/new_results"
     adjLists = glob.glob(f"{SAVEPATH}/adj*")
     
     # Load existing stats if available
-    stats_file = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/stats.csv"
+    stats_file = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/99p_stats.csv"
     if os.path.exists(stats_file):
         existing_stats = pd.read_csv(stats_file)
         stats_dict = {}
@@ -82,15 +83,40 @@ def main():
         
         counter = 0
         chunk = []
-        
+        edges_to_99pct_sum = 0   # accumulate across all nodes for this file
+
         print(f"Reading adjacency list...")
         with open(file, 'r') as f:
+            first_line = f.readline().strip()
+            # Detect format: new format is "source [(n, uc), ...]", old is "s,n1,n2,..."
+            has_tuples = ' [' in first_line
+            f.seek(0)
+
             for line in tqdm(f, desc=f"Processing edges", leave=False):
                 counter += 1
-                points = [int(p.strip()) for p in line.strip().split(',')]
+                line = line.strip()
+
+                if has_tuples:
+                    # Format: "source [(neighbor, uncov_left), ...]"
+                    space = line.index(' ')
+                    source = int(line[:space])
+                    neighborhood = ast.literal_eval(line[space+1:])  # list of (neighbor, uncov)
+                    points = [source] + [nb for nb, _ in neighborhood]
+
+                    # edges_to_99pct: first edge index where uncov_left <= 0.01 * n_nodes
+                    threshold = 0.01 * n_nodes
+                    edges_needed = len(neighborhood)   # default: needed all edges
+                    for edge_idx, (_, uncov) in enumerate(neighborhood):
+                        if uncov <= threshold:
+                            edges_needed = edge_idx + 1
+                            break
+                    edges_to_99pct_sum += edges_needed
+                else:
+                    # Legacy format: "source,n1,n2,..."
+                    points = [int(p.strip()) for p in line.split(',')]
+
                 chunk.append(points)
-                
-                # Process in chunks to avoid memory issues
+
                 if len(chunk) >= args.chunk_size:
                     process_chunk(chunk, outDeg, inDeg, n_nodes)
                     chunk = []
@@ -98,12 +124,12 @@ def main():
                         outDeg.flush()
                         inDeg.flush()
                         gc.collect()
-            
-            # Process remaining chunk
+
             if chunk:
                 process_chunk(chunk, outDeg, inDeg, n_nodes)
                 chunk = []
-        
+
+        avg_edges_to_99pct = round(edges_to_99pct_sum / counter, 2) if (has_tuples and counter) else None
         print(f"Computed degrees for {counter} points")
         
         # Flush to disk
@@ -133,7 +159,8 @@ def main():
             int(np.min(outDegNNZ)),
             int(np.max(outDegNNZ)),
             int(np.min(inDeg[:])),
-            int(np.max(inDeg[:]))
+            int(np.max(inDeg[:])),
+            avg_edges_to_99pct,
         ])
         
         print(f"✓ Completed {dataset_name}-{metric}: {counter} points, avg out-degree: {np.round(np.mean(outDegNNZ), 2)}")
@@ -144,9 +171,10 @@ def main():
         gc.collect()
     
     # Merge new stats with existing stats
-    new_stats_df = pd.DataFrame(stats, columns=['dataset', 'metric', 'dimensions', 'points computed', 'total points', 
-                                                  'mean out degree', 'median out degree', 'median in degree', 
-                                                  'min out degree', 'max out degree', 'min in degree', 'max in degree'])
+    new_stats_df = pd.DataFrame(stats, columns=['dataset', 'metric', 'dimensions', 'points computed', 'total points',
+                                                  'mean out degree', 'median out degree', 'median in degree',
+                                                  'min out degree', 'max out degree', 'min in degree', 'max in degree',
+                                                  'avg edges to 99pct coverage'])
     
     if os.path.exists(stats_file):
         processed_keys = set((row[0], row[1]) for row in stats)

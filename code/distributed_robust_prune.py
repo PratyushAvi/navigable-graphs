@@ -283,7 +283,10 @@ class Worker:
         return row
 
     def message(self, vecs, norms, vec_ids, inputs):
-        # print(vec_ids, inputs)
+        t_msg = time.time()
+        cmds = [cmd for _, cmd, _ in inputs]
+        print(f"[Worker {self.id}] message() start  vecs={len(vec_ids)}  cmds={dict(zip(*np.unique(cmds, return_counts=True)))}", flush=True)
+
         # Pass 1: INIT and KILL
         for vec_id, command, _ in inputs:
             if command == 'INIT':
@@ -344,6 +347,7 @@ class Worker:
             if command != 'KILL'
         }
 
+        print(f"[Worker {self.id}] message() done  elapsed={time.time()-t_msg:.2f}s", flush=True)
         return response, uncov_counts
 
     SPARSE_THRESHOLD = 5_000_000
@@ -362,8 +366,10 @@ class Worker:
         init_ids      = [v for v, cmd, _ in inputs if cmd == 'INIT']
 
         if init_ids:
-            # Full matmul required: need distances to every shard point for dists_matrix
+            print(f"[Worker {self.id}] _compute_dist INIT  shape=({len(vec_ids)}, {self.n})", flush=True)
+            t0 = time.time()
             D = V @ self.X.T  # (k, shard_size)
+            print(f"[Worker {self.id}] _compute_dist INIT matmul done  elapsed={time.time()-t0:.2f}s", flush=True)
             for vec_id in init_ids:
                 row = self.active_ids.get(vec_id)
                 if row is not None:
@@ -379,13 +385,17 @@ class Worker:
         union = np.unique(np.concatenate(parts)) if parts else np.array([], dtype=np.int32)
 
         if len(union) < self.SPARSE_THRESHOLD:
-            # Sparse: gather only uncovered rows of X, then matmul against that subset
-            X_sub = self.X[union]       # (|union|, 102) — random gather
-            D_sub = V @ X_sub.T        # (k, |union|)
+            print(f"[Worker {self.id}] _compute_dist SPARSE  union={len(union):,}  shape=({len(vec_ids)}, {len(union)})", flush=True)
+            t0 = time.time()
+            X_sub = self.X[union]
+            D_sub = V @ X_sub.T
+            print(f"[Worker {self.id}] _compute_dist SPARSE matmul done  elapsed={time.time()-t0:.2f}s", flush=True)
             return D_sub, union, vec_id_to_col, True
 
-        # Union too large: fall back to full matmul
+        print(f"[Worker {self.id}] _compute_dist DENSE  union={len(union):,}  shape=({len(vec_ids)}, {self.n})", flush=True)
+        t0 = time.time()
         D = V @ self.X.T
+        print(f"[Worker {self.id}] _compute_dist DENSE matmul done  elapsed={time.time()-t0:.2f}s", flush=True)
         return D, None, vec_id_to_col, False
 
 
