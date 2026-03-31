@@ -381,8 +381,14 @@ class Worker:
         if not update_rows:
             return None, None, vec_id_to_col, False
 
-        parts = [self.uncov_indices[row] for row in update_rows if len(self.uncov_indices[row]) > 0]
-        union = np.unique(np.concatenate(parts)) if parts else np.array([], dtype=np.int32)
+        # Build union via boolean mask — O(k × shard_size) time, O(shard_size) memory
+        # vs np.unique(np.concatenate(parts)) which is O(k × shard_size × log) and allocates k × shard_size elements
+        union_mask = np.zeros(self.n, dtype=np.bool_)
+        for row in update_rows:
+            ui = self.uncov_indices[row]
+            if len(ui) > 0:
+                union_mask[ui] = True
+        union = np.where(union_mask)[0].astype(np.int32)
 
         if len(union) < self.SPARSE_THRESHOLD:
             print(f"[Worker {self.id}] _compute_dist SPARSE  union={len(union):,}  shape=({len(vec_ids)}, {len(union)})", flush=True)
