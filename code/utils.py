@@ -182,6 +182,10 @@ def memEfficientRobustPrune(source, dataset):
 
 ##################################
 ### BATCHED SINGLE-MACHINE PRUNE ###
+# GPU (CuPy) and CPU (NumPy/BLAS) variants share the same algorithm.
+# The CPU path relies on NumPy's BLAS backend (OpenBLAS / MKL) for
+# multi-threaded matmuls; set OMP_NUM_THREADS / OPENBLAS_NUM_THREADS
+# in the job script to control core count.
 
 def precomputeAugMatrix(dataset):
     """
@@ -300,6 +304,98 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
 
         # Drop sources whose uncovered set is now empty
         still_active = cp.any(act_uncov, axis=1).get()   # (k,) bool
+        active = [gi for li, gi in enumerate(active) if still_active[li]]
+
+    return neighborhoods
+
+####################################
+### CPU VARIANTS (NumPy / BLAS) ###
+
+def precomputeAugMatrixCPU(dataset):
+    """CPU counterpart of precomputeAugMatrix — identical logic, NumPy arrays."""
+    n, d = dataset.shape
+    data_f32 = dataset.astype(np.float32)
+    sq_norms = np.einsum('ij,ij->i', data_f32, data_f32)   # (n,)
+    X_aug = np.empty((n, d + 2), dtype=np.float32)
+    X_aug[:, :d]  = data_f32
+    X_aug[:, d]   = 1.0
+    X_aug[:, d+1] = sq_norms
+    return X_aug
+
+
+def _query_aug_cpu(vecs, d):
+    """CPU counterpart of _query_aug."""
+    sq = np.einsum('ij,ij->i', vecs, vecs)   # (k,)
+    V = np.empty((vecs.shape[0], d + 2), dtype=np.float32)
+    V[:, :d]  = -2.0 * vecs
+    V[:, d]   = sq
+    V[:, d+1] = 1.0
+    return V
+
+
+def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_000_000):
+    """
+    CPU counterpart of batchedEuclideanRobustPrune.
+
+    Uses NumPy matmuls backed by OpenBLAS/MKL, which parallelise across all
+    allocated cores automatically (controlled by OMP_NUM_THREADS /
+    OPENBLAS_NUM_THREADS in the job script).  No .get() transfers needed.
+
+    Args / returns: identical to batchedEuclideanRobustPrune.
+    """
+    n, d = dataset.shape
+    B = len(sources)
+    sources_arr = np.array(sources, dtype=np.int64)
+
+    # INIT — one (B, n) BLAS matmul
+    sv = dataset[sources_arr].astype(np.float32)         # (B, d)
+    dists_matrix = _query_aug_cpu(sv, d) @ X_aug.T      # (B, n) squared euclidean
+    np.maximum(dists_matrix, 0.0, out=dists_matrix)
+
+    uncov_mask = np.ones((B, n), dtype=np.bool_)
+    uncov_mask[np.arange(B), sources_arr] = False
+
+    neighborhoods = [[] for _ in range(B)]
+    active = list(range(B))
+
+    while active:
+        act = np.array(active, dtype=np.int64)           # (k,)
+
+        act_uncov = uncov_mask[act]                      # (k, n) copy
+        act_dists = dists_matrix[act]                    # (k, n) copy
+
+        uncov_counts = np.sum(act_uncov, axis=1)         # (k,)
+
+        masked = np.where(act_uncov, act_dists, np.inf)  # (k, n)
+        waypoints = np.argmin(masked, axis=1)             # (k,)
+
+        for li, gi in enumerate(active):
+            neighborhoods[gi].append((int(waypoints[li]), int(uncov_counts[li])))
+
+        act_uncov[np.arange(len(active)), waypoints] = False
+
+        union_mask = np.any(act_uncov, axis=0)           # (n,)
+        union_size = int(np.sum(union_mask))
+
+        if union_size > 0:
+            wp_vecs = dataset[waypoints].astype(np.float32)   # (k, d)
+            W_aug   = _query_aug_cpu(wp_vecs, d)              # (k, d+2)
+
+            if union_size < sparse_threshold:
+                u_idx = np.where(union_mask)[0]               # (u,)
+                D_sub = W_aug @ X_aug[u_idx].T                # (k, u)
+                np.maximum(D_sub, 0.0, out=D_sub)
+                prune = D_sub < act_dists[:, u_idx]           # (k, u)
+                sub   = act_uncov[:, u_idx]                   # (k, u) copy
+                act_uncov[:, u_idx] = sub & ~prune            # scatter back
+            else:
+                D = W_aug @ X_aug.T                           # (k, n)
+                np.maximum(D, 0.0, out=D)
+                act_uncov &= ~(D < act_dists)
+
+        uncov_mask[act] = act_uncov
+
+        still_active = np.any(act_uncov, axis=1)         # (k,) — already on CPU
         active = [gi for li, gi in enumerate(active) if still_active[li]]
 
     return neighborhoods

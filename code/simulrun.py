@@ -26,8 +26,15 @@ def main():
         '--batch_size',
         type=int,
         default=50,
-        help='Number of sources processed in parallel per GPU batch (euclidean only). '
-             'Each batch holds 2 * batch_size * n float32 values on the GPU; tune to fit VRAM.'
+        help='Sources processed in parallel per batch. '
+             'GPU: tune to fit VRAM (~5 * batch_size * n * 4 bytes). '
+             'CPU: tune to fit RAM (same formula but RAM is usually larger).'
+    )
+    parser.add_argument(
+        '--cpu',
+        action='store_true',
+        help='Use CPU (NumPy/BLAS) instead of GPU (CuPy). '
+             'Set OMP_NUM_THREADS / OPENBLAS_NUM_THREADS in your job script.'
     )
     args = parser.parse_args()
     DATASET = args.dataset # Get dataset name from argument
@@ -57,10 +64,11 @@ def main():
 
     data = h5py.File(DATASETS[DATASET]['filepath'], 'r')['train']
     
-    if metric != 'jaccard':
-        dataset = cp.asarray(data)
-    else:
+    use_cpu = args.cpu
+    if metric == 'jaccard' or use_cpu:
         dataset = np.asarray(data)
+    else:
+        dataset = cp.asarray(data)
 
     # FIX: np.random.shuffle returns None, must shuffle the array first
     all_sources = np.arange(dataset.shape[0])
@@ -75,12 +83,19 @@ def main():
 
     if metric == 'euclidean':
         # Precompute augmented dataset matrix once; amortised across all batches.
-        X_aug = precomputeAugMatrix(dataset)
+        if use_cpu:
+            X_aug  = precomputeAugMatrixCPU(dataset)
+            _prune = batchedEuclideanRobustPruneCPU
+            print(f"Running on CPU  (batch_size={args.batch_size})")
+        else:
+            X_aug  = precomputeAugMatrix(dataset)
+            _prune = batchedEuclideanRobustPrune
+            print(f"Running on GPU  (batch_size={args.batch_size})")
 
         pbar = tqdm(total=len(sources_to_process))
         for i in range(0, len(sources_to_process), args.batch_size):
             batch = sources_to_process[i : i + args.batch_size]
-            neighborhoods = batchedEuclideanRobustPrune(batch, dataset, X_aug)
+            neighborhoods = _prune(batch, dataset, X_aug)
 
             # Write entire batch at once; a crash loses at most batch_size sources of work.
             with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
