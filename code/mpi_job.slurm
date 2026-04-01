@@ -23,22 +23,27 @@ export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 # Build hostfile: one line per node, one slot per node (one MPI rank per node)
 scontrol show hostnames $SLURM_JOB_NODELIST | awk '{print $0 " slots=1"}' > hostfile_$SLURM_JOB_ID
 
-$SING /bin/bash -c "
-    source /ext3/miniforge3/etc/profile.d/conda.sh && \
-    conda activate big_ann && \
-    mpirun -np 9 \
-        --hostfile hostfile_$SLURM_JOB_ID \
-        --map-by node \
-        --mca plm rsh \
-        --mca plm_rsh_agent "ssh -o StrictHostKeyChecking=no" \
-        -x OMP_NUM_THREADS \
-        -x OPENBLAS_NUM_THREADS \
-        -x OMPI_ALLOW_RUN_AS_ROOT \
-        -x OMPI_ALLOW_RUN_AS_ROOT_CONFIRM \
-        python /scratch/pa2439/ANN-Search/navigable_graph_results/code/mpi4py_distributed_robust_prune.py \
-            --data $SCRATCH/ANN-Search/datasets/spacev1b \
-            --num_points 10000 \
-            --batch 50 \
-            --num_shards 8 \
-            --cpus 32
-"
+RUNSCRIPT=/tmp/mpi_run_$SLURM_JOB_ID.sh
+cat > $RUNSCRIPT << EOF
+#!/bin/bash
+source /ext3/miniforge3/etc/profile.d/conda.sh
+conda activate big_ann
+mpirun -np 9 \\
+    --hostfile hostfile_$SLURM_JOB_ID \\
+    --map-by node \\
+    --mca plm rsh \\
+    --mca plm_rsh_agent "ssh -o StrictHostKeyChecking=no" \\
+    -x OMP_NUM_THREADS \\
+    -x OPENBLAS_NUM_THREADS \\
+    -x OMPI_ALLOW_RUN_AS_ROOT \\
+    -x OMPI_ALLOW_RUN_AS_ROOT_CONFIRM \\
+    python /scratch/pa2439/ANN-Search/navigable_graph_results/code/mpi4py_distributed_robust_prune.py \\
+        --data $SCRATCH/ANN-Search/datasets/spacev1b \\
+        --num_points 10000 \\
+        --batch 50 \\
+        --num_shards 8 \\
+        --cpus 32
+EOF
+chmod +x $RUNSCRIPT
+
+$SING /bin/bash $RUNSCRIPT
