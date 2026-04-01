@@ -12,6 +12,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True, help="Path to dataset directory")
+    parser.add_argument("--save_path", required=True, help="Path to save results")
     parser.add_argument("--num_points", type=int, default=10_000)
     parser.add_argument("--batch", type=int, default=50)
     parser.add_argument("--num_shards", type=int, default=17)
@@ -49,6 +50,7 @@ def main():
     print("Creating coordinator actor...", flush=True)
     coordinator = CoordinatorActor.options(num_cpus=args.coordinator_cpus).remote(
         EFS_PATH=args.data,
+        SAVE_PATH=args.save_path,
         num_points=args.num_points,
         batch=args.batch,
         workers=workers
@@ -65,9 +67,10 @@ def main():
 # ---------------------------------------------------------------------------
 
 class Coordinator:
-    def __init__(self, EFS_PATH, num_points, batch):
+    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch):
         os.environ["RAY_DEDUP_LOGS"] = "0"
         self.EFS_PATH   = EFS_PATH
+        self.SAVE_PATH = SAVE_PATH
         self.num_points = num_points
         self.batch      = batch
 
@@ -85,7 +88,7 @@ class Coordinator:
         self.uncov_current = {}   # vec_id -> current total uncov
         self.point_state   = {}   # vec_id -> 'INIT' | 'UPDATE'
 
-        with open(f"{self.EFS_PATH}/computed.txt", "r") as f:
+        with open(f"{self.SAVE_PATH}/spacev1b-euclidean-computed.txt.txt", "r") as f:
             for p in f.readlines():
                 self.computed.add(int(p.strip()))
 
@@ -220,9 +223,9 @@ class Coordinator:
         return {vid: responses[vid][0] for vid in responses}, rtt, dict(uncov_totals)
 
     def writeNeighborhood(self, vec_id):
-        with open(f"{self.EFS_PATH}/computed.txt", 'a+') as f:
+        with open(f"{self.SAVE_PATH}/spacev1b-euclidean-computed.txt", 'a+') as f:
             f.write(f"{vec_id}\n")
-        with open(f"{self.EFS_PATH}/neighborhoods.txt", 'a+') as f:
+        with open(f"{self.SAVE_PATH}/adj-list-spacev1b-euclidean.txt", 'a+') as f:
             f.write(f"{self.neighborhoods[vec_id]}\n")
 
 
