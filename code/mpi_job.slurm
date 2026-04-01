@@ -18,7 +18,10 @@ SING="singularity exec --fakeroot --overlay ${OVERLAY}:ro ${SIF}"
 export OMP_NUM_THREADS=32
 export OPENBLAS_NUM_THREADS=32
 
-srun $SING /bin/bash -c "
+# Generate hostfile from SLURM's node allocation (one entry per node = one rank per node)
+scontrol show hostnames $SLURM_JOB_NODELIST | awk '{print $0, "slots=1"}' > hostfile_$SLURM_JOB_ID
+
+srun --mpi=pmix $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
     python /scratch/pa2439/ANN-Search/navigable_graph_results/code/mpi4py_distributed_robust_prune.py \
