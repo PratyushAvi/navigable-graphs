@@ -5,8 +5,6 @@ from heapq import heappush
 import ray
 import os
 
-os.environ["RAY_DEDUP_LOGS"] = "0"
-
 def main():
     import argparse
 
@@ -66,6 +64,7 @@ def main():
 
 class Coordinator:
     def __init__(self, EFS_PATH, num_points, batch):
+        os.environ["RAY_DEDUP_LOGS"] = "0"
         self.EFS_PATH   = EFS_PATH
         self.num_points = num_points
         self.batch      = batch
