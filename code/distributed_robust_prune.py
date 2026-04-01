@@ -237,9 +237,10 @@ class Worker:
         print(f"[Worker {shard_id}] OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}  "
               f"os.cpu_count()={os.cpu_count()}  threadpool={info}", flush=True)
 
+        import socket
         self.id       = shard_id
         self.EFS_PATH = EFS_PATH
-        print(f"[Worker {shard_id}] init start", flush=True)
+        print(f"[Worker {shard_id}] init start  node={socket.gethostname()}", flush=True)
 
         t0    = time.time()
         total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
