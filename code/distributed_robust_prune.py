@@ -3,6 +3,9 @@ import collections
 import time
 from heapq import heappush
 import ray
+import os
+
+os.environ["RAY_DEDUP_LOGS"] = "0"
 
 def main():
     import argparse
