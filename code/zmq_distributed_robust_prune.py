@@ -183,27 +183,28 @@ class Worker:
 
 def run_worker(args):
     context = zmq.Context()
-    socket  = context.socket(zmq.REP)   # REP: recv then send, one round-trip per message
+    socket  = context.socket(zmq.DEALER)
     socket.connect(f"tcp://{args.coordinator}")
     print(f"[Worker {args.shard_id}] connected to coordinator at {args.coordinator}", flush=True)
 
     worker = Worker(args.shard_id, args.data, args.num_shards, args.cpus)
 
-    # Signal ready
-    socket.send(b"READY")
+    # Signal ready — DEALER can send freely without recv first
+    socket.send_multipart([b"", b"READY"])
 
     while True:
-        raw = socket.recv()
-        msg = pickle.loads(raw)
+        parts = socket.recv_multipart()
+        raw   = parts[-1]   # DEALER adds empty delimiter frame
+        msg   = pickle.loads(raw)
 
         if msg == "SHUTDOWN":
             print(f"[Worker {args.shard_id}] shutting down", flush=True)
-            socket.send(b"OK")
+            socket.send_multipart([b"", b"OK"])
             break
 
         vecs, norms, vec_ids, inputs = msg
         response, uncov_counts = worker.message(vecs, norms, vec_ids, inputs)
-        socket.send(pickle.dumps((response, uncov_counts)))
+        socket.send_multipart([b"", pickle.dumps((response, uncov_counts))])
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +247,7 @@ class Coordinator:
         print(f"Coordinator bound to port {port}, waiting for {num_shards} workers...", flush=True)
 
         # Wait for all workers to send READY
+        # ROUTER receives: [identity, delimiter, payload]
         self.worker_ids = []
         while len(self.worker_ids) < num_shards:
             identity, _, msg = self.socket.recv_multipart()
@@ -253,6 +255,8 @@ class Coordinator:
                 self.worker_ids.append(identity)
                 print(f"  Worker {len(self.worker_ids)}/{num_shards} ready  id={identity.hex()}", flush=True)
         print("All workers ready.", flush=True)
+        # Fix ordering so shard_id matches position — workers connect in arbitrary order
+        # We can't guarantee order, so just log and proceed; the coordinator treats them uniformly.
 
     def computeNeighborhoods(self):
         self.active = set(int(v) for v in np.random.choice(self.vector_ids, self.batch, replace=False))
@@ -328,14 +332,14 @@ class Coordinator:
         payload = pickle.dumps((vecs, norms_, compute_distances, message))
 
         t0 = time.time()
-        # Send to all workers (non-blocking)
+        # Send to all workers: [identity, delimiter, payload]
         for wid in self.worker_ids:
             self.socket.send_multipart([wid, b"", payload])
 
-        # Collect all responses
+        # Collect responses — ROUTER receives [identity, delimiter, payload]
         all_responses = []
         for _ in self.worker_ids:
-            identity, _, raw = self.socket.recv_multipart()
+            _, _, raw = self.socket.recv_multipart()
             all_responses.append(pickle.loads(raw))
         rtt = time.time() - t0
 
@@ -357,7 +361,7 @@ class Coordinator:
         for wid in self.worker_ids:
             self.socket.send_multipart([wid, b"", payload])
         for _ in self.worker_ids:
-            self.socket.recv_multipart()
+            self.socket.recv_multipart()   # drain OK responses
 
     def writeNeighborhood(self, vec_id):
         with open(f"{self.data_path}/computed.txt", 'a+') as f:
