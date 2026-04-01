@@ -17,6 +17,8 @@ SING="singularity exec --fakeroot --overlay ${OVERLAY}:ro ${SIF}"
 
 export OMP_NUM_THREADS=32
 export OPENBLAS_NUM_THREADS=32
+export OMPI_ALLOW_RUN_AS_ROOT=1
+export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 
 # Build hostfile: one line per node, one slot per node (one MPI rank per node)
 scontrol show hostnames $SLURM_JOB_NODELIST | awk '{print $0 " slots=1"}' > hostfile_$SLURM_JOB_ID
