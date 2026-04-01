@@ -29,8 +29,12 @@ $SING /bin/bash -c "
     mpirun -np 9 \
         --hostfile hostfile_$SLURM_JOB_ID \
         --map-by node \
+        --mca plm rsh \
+        --mca plm_rsh_agent "ssh -o StrictHostKeyChecking=no" \
         -x OMP_NUM_THREADS \
         -x OPENBLAS_NUM_THREADS \
+        -x OMPI_ALLOW_RUN_AS_ROOT \
+        -x OMPI_ALLOW_RUN_AS_ROOT_CONFIRM \
         python /scratch/pa2439/ANN-Search/navigable_graph_results/code/mpi4py_distributed_robust_prune.py \
             --data $SCRATCH/ANN-Search/datasets/spacev1b \
             --num_points 10000 \
