@@ -12,7 +12,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=64GB
+#SBATCH --mem=128GB
 #SBATCH --time=24:00:00
 #SBATCH --output=slurm_out/slurm_%j_coordinator.out
 
@@ -22,7 +22,7 @@
 #SBATCH --ntasks=8
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=240GB
+#SBATCH --mem=256GB
 #SBATCH --time=24:00:00
 #SBATCH --output=slurm_out/slurm_%j_worker%t.out
 
@@ -51,6 +51,7 @@ srun --het-group=0 $SING /bin/bash -c "
         --disable-usage-stats && \
     python /scratch/pa2439/ANN-Search/navigable_graph_results/code/distributed_robust_prune.py \
         --data $SCRATCH/ANN-Search/datasets/spacev1b \
+	--save_path $SCRATCH/ANN-Search/navigable_graph_results \
         --num_points 10000 \
         --batch 50 \
         --num_shards 8 \
