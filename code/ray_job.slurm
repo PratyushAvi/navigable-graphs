@@ -1,14 +1,12 @@
 #!/bin/bash
-# Heterogeneous job: group 0 = head/coordinator (1 node), group 1 = workers (8 nodes)
+# Heterogeneous job: component 0 = head/coordinator (1 node), component 1 = workers (8 nodes)
 # Submit: sbatch ray_job.slurm
 
+# --- Head node (coordinator) — component 0 ---
 #SBATCH --job-name=nvgbl-ray
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=pa2439@nyu.edu
 #SBATCH --account=torch_pr_929_general
-
-# --- Head node (coordinator) ---
-#SBATCH hetjob
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
@@ -16,7 +14,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=slurm_out/slurm_%j_coordinator.out
 
-# --- Worker nodes ---
+# --- Worker nodes — component 1 ---
 #SBATCH hetjob
 #SBATCH --nodes=8
 #SBATCH --ntasks=8
@@ -34,7 +32,7 @@ export OMP_NUM_THREADS=32
 export OPENBLAS_NUM_THREADS=32
 
 # Get the IP of the head node (het-group 0, task 0)
-HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST_HET_GROUP_0" | head -n1)
+HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST_HET_GROUP_0" | head -n1)  # component 0 = head
 HEAD_IP=$(getent hosts $HEAD_NODE | awk '{print $1}')
 RAY_PORT=6379
 
@@ -62,7 +60,7 @@ srun --het-group=0 $SING /bin/bash -c "
 # Give head a moment to bind the port before workers connect
 sleep 15
 
-# Start Ray workers on group 1
+# Start Ray workers on component 1
 srun --het-group=1 $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
