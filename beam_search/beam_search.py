@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import networkx as nx
 from heapq import heappush, heappop
@@ -188,6 +189,41 @@ def main():
     df_test = run_search(Y, ground_truth=Y_top_100, query_indices=None)
     print_summary(df_test, "Test queries")
     df_test.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_test.csv", index=False)
+
+    # --- Summary CSV (one row per run, append if exists) ---
+    summary_row = {
+        'dataset':           DATASET['name'],
+        'beam_width':        beam_width,
+        'num_results':       K,
+        'avg_edges':         avg_deg_G,
+        'avg_edges_99':      avg_deg_G_99,
+        'avg_edges_90':      avg_deg_G_90,
+        # train
+        'train_recall_G':    df_train['recall_full'].mean(),
+        'train_recall_99':   df_train['recall_99'].mean(),
+        'train_recall_90':   df_train['recall_90'].mean(),
+        'train_seen_G':      df_train['seen_full'].mean(),
+        'train_seen_99':     df_train['seen_99'].mean(),
+        'train_seen_90':     df_train['seen_90'].mean(),
+        'train_expanded_G':  df_train['expanded_full'].mean(),
+        'train_expanded_99': df_train['expanded_99'].mean(),
+        'train_expanded_90': df_train['expanded_90'].mean(),
+        # test
+        'test_recall_G':     df_test['recall_full'].mean(),
+        'test_recall_99':    df_test['recall_99'].mean(),
+        'test_recall_90':    df_test['recall_90'].mean(),
+        'test_seen_G':       df_test['seen_full'].mean(),
+        'test_seen_99':      df_test['seen_99'].mean(),
+        'test_seen_90':      df_test['seen_90'].mean(),
+        'test_expanded_G':   df_test['expanded_full'].mean(),
+        'test_expanded_99':  df_test['expanded_99'].mean(),
+        'test_expanded_90':  df_test['expanded_90'].mean(),
+    }
+    summary_path = f"{args.save_path}/beam_search_summary.csv"
+    summary_df = pd.DataFrame([summary_row])
+    write_header = not os.path.exists(summary_path)
+    summary_df.to_csv(summary_path, mode='a', header=write_header, index=False)
+    print(f"\nSummary appended to {summary_path}")
     
 
 def load_graphs(adj_list_path, n):
