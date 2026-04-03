@@ -78,6 +78,10 @@ def main():
         'top_K_partial': [],
         'relevant_full': [],
         'relevant_partial': [],
+        'precision_full': [],
+        'precision_partial': [],
+        'recall_full': [],
+        'recall_partial': [],
         'seen_full': [],
         'seen_partial': [],
         'expanded_full': [],
@@ -107,16 +111,39 @@ def main():
         results['number_of_results'].append(K)
         results['top_K_full'].append(nodes_G.tolist())
         results['top_K_partial'].append(nodes_G_99.tolist())
+        # Per-query precision, recall, NDCG
+        top_K_set = set(top_100_neighbors)
+
+        prec_G     = len(rel_G)    / K
+        prec_G_99  = len(rel_G_99) / K
+        rec_G      = len(rel_G)    / 100
+        rec_G_99   = len(rel_G_99) / 100
+
         results['relevant_full'].append(rel_G.tolist())
         results['relevant_partial'].append(rel_G_99.tolist())
+        results['precision_full'].append(prec_G)
+        results['precision_partial'].append(prec_G_99)
+        results['recall_full'].append(rec_G)
+        results['recall_partial'].append(rec_G_99)
         results['seen_full'].append(seen_G)
         results['seen_partial'].append(seen_G_99)
         results['expanded_full'].append(expanded_G)
         results['expanded_partial'].append(expanded_G_99)
     
     df = pd.DataFrame(results)
-    print(df)
-    df.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}.csv")
+
+    summary = pd.DataFrame({
+        'metric': ['avg precision', 'avg recall', 'avg NDCG', 'avg nodes seen', 'avg nodes expanded'],
+        'G':    [df['precision_full'].mean(),    df['recall_full'].mean(),
+                 df['seen_full'].mean(),          df['expanded_full'].mean()],
+        'G_99': [df['precision_partial'].mean(), df['recall_partial'].mean(),
+                 df['seen_partial'].mean(),       df['expanded_partial'].mean()],
+    })
+
+    print(summary.to_string(index=False))
+    df.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}.csv", index=False)
+    # summary.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_summary.csv", index=False)
+    
 
 def load_graphs(adj_list_path, n):
     import ast
