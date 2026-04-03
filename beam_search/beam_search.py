@@ -4,20 +4,19 @@ from heapq import heappush, heappop
 import argparse
 import h5py
 from scipy.spatial.distance import cdist
-from scipy.stats import rankdata
 import pandas as pd
 from tqdm import tqdm
 
-def classicBeamSearch(source, target, G, d, b, k):
+def classicBeamSearch(source, target, G, d_q, b, k):
     """
-    G: nx.DiGraph
-    d: (n, n) numpy distance matrix
-    b: beam width
-    k: number of nearest neighbours to return
+    G:   nx.DiGraph
+    d_q: (n,) array of squared euclidean distances from every point to target
+    b:   beam width
+    k:   number of nearest neighbours to return
     """
     D = set([source])
-    C = [(d[source, target], source)]
-    B = [(d[source, target], source)]
+    C = [(d_q[source], source)]
+    B = [(d_q[source], source)]
     nodes_expanded = 0
 
     while C:
@@ -29,9 +28,9 @@ def classicBeamSearch(source, target, G, d, b, k):
         for y in G.successors(node):
             if y not in D:
                 D.add(y)
-                if len(B) < b or B[0][0] > d[target, y]:
-                    heappush(B, (d[target, y], y))
-                    heappush(C, (d[target, y], y))
+                if len(B) < b or B[0][0] > d_q[y]:
+                    heappush(B, (d_q[y], y))
+                    heappush(C, (d_q[y], y))
 
                     if len(B) == b + 1:
                         heappop(B)
@@ -61,23 +60,19 @@ def main():
     X = data['train'][:]
     n = X.shape[0]
 
-    print("Computing distances...")
-    D = cdist(X, X, metric='sqeuclidean')
-
     print(f"Building networkx graphs...")
     G, G_99 = load_graphs(args.adj_list, n)
 
     queries = np.sort(np.random.choice(np.arange(X.shape[0]), size=10, replace=False))
     K = 10
     beam_width = 10
-    print("Getting top 100 neighbors...")
-    top_100_neighbors = rankdata(D, method='ordinal', axis=1)[:, 100]
-
-    random_source = np.randint(0, X.shape[0])
+    random_source = np.random.randint(0, X.shape[0])
 
     results = {
         'q': [],
         'source': [],
+        'beam_width': [],
+        'number_of_results': [],
         'top_K_full': [],
         'top_K_partial': [],
         'relevant_full': [],
@@ -90,20 +85,30 @@ def main():
 
     print("Performing Search...")
     for q in tqdm(queries):
-        result_G, expanded_G, seen_G = classicBeamSearch(random_source, q, G, D, beam_width, K)
-        result_G_99, expanded_G_99, seen_G_99 = classicBeamSearch(random_source, q, G_99, D, beam_width, K)
+        # Distances from every point to query q — one vectorized BLAS call
+        d_q = cdist(X[q:q+1], X, metric='sqeuclidean').ravel()
 
-        rel_G = np.intersect1d(np.array(result_G), top_100_neighbors[q])
-        rel_G_99 = np.intersect1d(np.array(result_G_99), top_100_neighbors[q])
+        # Top-100 ground truth for free from the same array
+        top_100_neighbors = np.argsort(d_q)[:101]
+        top_100_neighbors = top_100_neighbors[top_100_neighbors != q][:100]
+
+        result_G,    expanded_G,    seen_G    = classicBeamSearch(random_source, q, G,    d_q, beam_width, K)
+        result_G_99, expanded_G_99, seen_G_99 = classicBeamSearch(random_source, q, G_99, d_q, beam_width, K)
+
+        nodes_G    = np.array([node for _, node in result_G])
+        nodes_G_99 = np.array([node for _, node in result_G_99])
+
+        rel_G    = np.intersect1d(nodes_G,    top_100_neighbors)
+        rel_G_99 = np.intersect1d(nodes_G_99, top_100_neighbors)
 
         results['q'].append(q)
         results['source'].append(random_source)
         results['beam_width'].append(beam_width)
         results['number_of_results'].append(K)
-        results['top_K_full'].append(result_G)
-        results['top_K_partial'].append(result_G_99)
-        results['relevant_full'].append(rel_G)
-        results['relevant_partial'].append(rel_G_99)
+        results['top_K_full'].append(nodes_G.tolist())
+        results['top_K_partial'].append(nodes_G_99.tolist())
+        results['relevant_full'].append(rel_G.tolist())
+        results['relevant_partial'].append(rel_G_99.tolist())
         results['seen_full'].append(seen_G)
         results['seen_partial'].append(seen_G_99)
         results['expanded_full'].append(expanded_G)
