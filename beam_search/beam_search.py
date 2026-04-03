@@ -64,10 +64,15 @@ def main():
     n = X.shape[0]
 
     print(f"Building networkx graphs...")
-    G, G_99 = load_graphs(args.adj_list, n)
+    G, G_99, G_90 = load_graphs(args.adj_list, n)
 
-    K = 50
-    beam_width = 100
+    avg_deg_G    = G.number_of_edges()    / n
+    avg_deg_G_99 = G_99.number_of_edges() / n
+    avg_deg_G_90 = G_90.number_of_edges() / n
+    print(f"Avg out-degree — G: {avg_deg_G:.2f} | G_99: {avg_deg_G_99:.2f} | G_90: {avg_deg_G_90:.2f}")
+
+    K = 100
+    beam_width = 150
     random_source = np.random.randint(0, X.shape[0])
 
     def run_search(query_vectors, ground_truth, query_indices=None):
@@ -82,17 +87,23 @@ def main():
             'beam_width': [],
             'number_of_results': [],
             'top_K_full': [],
-            'top_K_partial': [],
+            'top_K_99': [],
+            'top_K_90': [],
             'relevant_full': [],
-            'relevant_partial': [],
+            'relevant_99': [],
+            'relevant_90': [],
             'precision_full': [],
-            'precision_partial': [],
+            'precision_99': [],
+            'precision_90': [],
             'recall_full': [],
-            'recall_partial': [],
+            'recall_99': [],
+            'recall_90': [],
             'seen_full': [],
-            'seen_partial': [],
+            'seen_99': [],
+            'seen_90': [],
             'expanded_full': [],
-            'expanded_partial': []
+            'expanded_99': [],
+            'expanded_90': []
         }
 
         for i, qvec in enumerate(tqdm(query_vectors)):
@@ -105,49 +116,62 @@ def main():
                 top_100_neighbors = np.argsort(d_q)[:101]
                 top_100_neighbors = top_100_neighbors[top_100_neighbors != q][:100]
 
-            # Use index into X as the "query id"; for test queries use i
             q_id = query_indices[i] if query_indices is not None else i
+            tgt  = q_id if query_indices is not None else -1
 
-            result_G,    expanded_G,    seen_G    = classicBeamSearch(random_source, q_id if query_indices is not None else -1, G,    d_q, beam_width, K)
-            result_G_99, expanded_G_99, seen_G_99 = classicBeamSearch(random_source, q_id if query_indices is not None else -1, G_99, d_q, beam_width, K)
+            result_G,    expanded_G,    seen_G    = classicBeamSearch(random_source, tgt, G,    d_q, beam_width, K)
+            result_G_99, expanded_G_99, seen_G_99 = classicBeamSearch(random_source, tgt, G_99, d_q, beam_width, K)
+            result_G_90, expanded_G_90, seen_G_90 = classicBeamSearch(random_source, tgt, G_90, d_q, beam_width, K)
 
             nodes_G    = np.array([node for _, node in result_G])
             nodes_G_99 = np.array([node for _, node in result_G_99])
+            nodes_G_90 = np.array([node for _, node in result_G_90])
 
             rel_G    = np.intersect1d(nodes_G,    top_100_neighbors)
             rel_G_99 = np.intersect1d(nodes_G_99, top_100_neighbors)
+            rel_G_90 = np.intersect1d(nodes_G_90, top_100_neighbors)
 
             prec_G    = len(rel_G)    / K
             prec_G_99 = len(rel_G_99) / K
+            prec_G_90 = len(rel_G_90) / K
             rec_G     = len(rel_G)    / 100
             rec_G_99  = len(rel_G_99) / 100
+            rec_G_90  = len(rel_G_90) / 100
 
             results['q'].append(q_id)
             results['source'].append(random_source)
             results['beam_width'].append(beam_width)
             results['number_of_results'].append(K)
             results['top_K_full'].append(nodes_G.tolist())
-            results['top_K_partial'].append(nodes_G_99.tolist())
+            results['top_K_99'].append(nodes_G_99.tolist())
+            results['top_K_90'].append(nodes_G_90.tolist())
             results['relevant_full'].append(rel_G.tolist())
-            results['relevant_partial'].append(rel_G_99.tolist())
+            results['relevant_99'].append(rel_G_99.tolist())
+            results['relevant_90'].append(rel_G_90.tolist())
             results['precision_full'].append(prec_G)
-            results['precision_partial'].append(prec_G_99)
+            results['precision_99'].append(prec_G_99)
+            results['precision_90'].append(prec_G_90)
             results['recall_full'].append(rec_G)
-            results['recall_partial'].append(rec_G_99)
+            results['recall_99'].append(rec_G_99)
+            results['recall_90'].append(rec_G_90)
             results['seen_full'].append(seen_G)
-            results['seen_partial'].append(seen_G_99)
+            results['seen_99'].append(seen_G_99)
+            results['seen_90'].append(seen_G_90)
             results['expanded_full'].append(expanded_G)
-            results['expanded_partial'].append(expanded_G_99)
+            results['expanded_99'].append(expanded_G_99)
+            results['expanded_90'].append(expanded_G_90)
 
         return pd.DataFrame(results)
 
     def print_summary(df, label):
         summary = pd.DataFrame({
             'metric': ['avg precision', 'avg recall', 'avg nodes seen', 'avg nodes expanded'],
-            'G':    [df['precision_full'].mean(),    df['recall_full'].mean(),
-                     df['seen_full'].mean(),          df['expanded_full'].mean()],
-            'G_99': [df['precision_partial'].mean(), df['recall_partial'].mean(),
-                     df['seen_partial'].mean(),       df['expanded_partial'].mean()],
+            'G':    [df['precision_full'].mean(), df['recall_full'].mean(),
+                     df['seen_full'].mean(),       df['expanded_full'].mean()],
+            'G_99': [df['precision_99'].mean(),   df['recall_99'].mean(),
+                     df['seen_99'].mean(),         df['expanded_99'].mean()],
+            'G_90': [df['precision_90'].mean(),   df['recall_90'].mean(),
+                     df['seen_90'].mean(),         df['expanded_90'].mean()],
         })
         print(f"\n=== {label} ===")
         print(summary.to_string(index=False))
@@ -171,10 +195,13 @@ def load_graphs(adj_list_path, n):
 
     G    = nx.DiGraph()
     G_99 = nx.DiGraph()
+    G_90 = nx.DiGraph()
     G.add_nodes_from(range(n))
     G_99.add_nodes_from(range(n))
+    G_90.add_nodes_from(range(n))
 
-    threshold = 0.01 * n
+    threshold_99 = 0.01 * n
+    threshold_90 = 0.10 * n
 
     with open(adj_list_path, 'r') as f:
         for line in tqdm(f):
@@ -187,10 +214,12 @@ def load_graphs(adj_list_path, n):
 
             for neighbor, uncov in neighborhood:
                 G.add_edge(source, neighbor)
-                if uncov > threshold:
+                if uncov > threshold_99:
                     G_99.add_edge(source, neighbor)
+                if uncov > threshold_90:
+                    G_90.add_edge(source, neighbor)
 
-    return G, G_99
+    return G, G_99, G_90
 
 if __name__ == '__main__':
     main()
