@@ -2,7 +2,7 @@ singularity exec --fakeroot --overlay $SCRATCH/envs/overlay-15GB-500K.ext3:ro /s
 source /ext3/env.sh
 conda activate big_ann
 
-MY_IP=$(hostname -I | awk '{print $1}')
+MY_IP=$(hostname -I | awk '{print $2}')
 ray start --head --node-ip-address=$MY_IP --port=6379 --num-cpus=16
 
 
