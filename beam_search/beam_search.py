@@ -60,16 +60,18 @@ def main():
 
     X = data['train']
     n = X.shape[0]
-    D = cdist(X, X, metric='sqeuclidean')
 
-    K = 10
-    beam_width = 10
-    top_100_neighbors = rankdata(D, method='ordinal', axis=1)[:, K]
+    print("Computing distances...")
+    D = cdist(X, X, metric='sqeuclidean')
 
     print(f"Building networkx graphs...")
     G, G_99 = load_graphs(args.adj_list, n)
 
     queries = np.sort(np.random.choice(np.arange(X.shape[0]), size=10, replace=False))
+    K = 10
+    beam_width = 10
+    print("Getting top 100 neighbors...")
+    top_100_neighbors = rankdata(D, method='ordinal', axis=1)[:, 100]
 
     random_source = np.randint(0, X.shape[0])
 
@@ -122,7 +124,7 @@ def load_graphs(adj_list_path, n):
     threshold = 0.01 * n
 
     with open(adj_list_path, 'r') as f:
-        for line in f:
+        for line in tqdm(f):
             line = line.strip()
             if not line:
                 continue
