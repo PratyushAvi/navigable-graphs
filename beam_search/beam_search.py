@@ -59,92 +59,111 @@ def main():
     data = h5py.File(DATASET['filepath'], 'r')
 
     X = data['train'][:]
+    Y = data['test'][:]
+    Y_top_100 = data['neighbors'][:]
     n = X.shape[0]
 
     print(f"Building networkx graphs...")
     G, G_99 = load_graphs(args.adj_list, n)
 
-    queries = np.sort(np.random.choice(np.arange(X.shape[0]), size=1000, replace=False))
     K = 50
     beam_width = 100
     random_source = np.random.randint(0, X.shape[0])
 
-    results = {
-        'q': [],
-        'source': [],
-        'beam_width': [],
-        'number_of_results': [],
-        'top_K_full': [],
-        'top_K_partial': [],
-        'relevant_full': [],
-        'relevant_partial': [],
-        'precision_full': [],
-        'precision_partial': [],
-        'recall_full': [],
-        'recall_partial': [],
-        'seen_full': [],
-        'seen_partial': [],
-        'expanded_full': [],
-        'expanded_partial': []
-    }
+    def run_search(query_vectors, ground_truth, query_indices=None):
+        """
+        query_vectors: (m, d) array of query points
+        ground_truth:  (m, 100) array of true neighbor indices, or None (compute from X)
+        query_indices: if not None, indices into X (for train queries); distances exclude self
+        """
+        results = {
+            'q': [],
+            'source': [],
+            'beam_width': [],
+            'number_of_results': [],
+            'top_K_full': [],
+            'top_K_partial': [],
+            'relevant_full': [],
+            'relevant_partial': [],
+            'precision_full': [],
+            'precision_partial': [],
+            'recall_full': [],
+            'recall_partial': [],
+            'seen_full': [],
+            'seen_partial': [],
+            'expanded_full': [],
+            'expanded_partial': []
+        }
 
-    print("Performing Search...")
-    for q in queries:
-        # Distances from every point to query q — one vectorized BLAS call
-        d_q = cdist(X[q:q+1], X, metric='sqeuclidean').ravel()
+        for i, qvec in enumerate(tqdm(query_vectors)):
+            d_q = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
 
-        top_100_neighbors = np.argsort(d_q)[:101]
-        top_100_neighbors = top_100_neighbors[top_100_neighbors != q][:100]
+            if ground_truth is not None:
+                top_100_neighbors = ground_truth[i][:100]
+            else:
+                q = query_indices[i]
+                top_100_neighbors = np.argsort(d_q)[:101]
+                top_100_neighbors = top_100_neighbors[top_100_neighbors != q][:100]
 
-        result_G,    expanded_G,    seen_G    = classicBeamSearch(random_source, q, G,    d_q, beam_width, K)
-        result_G_99, expanded_G_99, seen_G_99 = classicBeamSearch(random_source, q, G_99, d_q, beam_width, K)
+            # Use index into X as the "query id"; for test queries use i
+            q_id = query_indices[i] if query_indices is not None else i
 
-        nodes_G    = np.array([node for _, node in result_G])
-        nodes_G_99 = np.array([node for _, node in result_G_99])
+            result_G,    expanded_G,    seen_G    = classicBeamSearch(random_source, q_id if query_indices is not None else -1, G,    d_q, beam_width, K)
+            result_G_99, expanded_G_99, seen_G_99 = classicBeamSearch(random_source, q_id if query_indices is not None else -1, G_99, d_q, beam_width, K)
 
-        rel_G    = np.intersect1d(nodes_G,    top_100_neighbors)
-        rel_G_99 = np.intersect1d(nodes_G_99, top_100_neighbors)
+            nodes_G    = np.array([node for _, node in result_G])
+            nodes_G_99 = np.array([node for _, node in result_G_99])
 
-        print(len(rel_G), len(rel_G_99))
+            rel_G    = np.intersect1d(nodes_G,    top_100_neighbors)
+            rel_G_99 = np.intersect1d(nodes_G_99, top_100_neighbors)
 
-        results['q'].append(q)
-        results['source'].append(random_source)
-        results['beam_width'].append(beam_width)
-        results['number_of_results'].append(K)
-        results['top_K_full'].append(nodes_G.tolist())
-        results['top_K_partial'].append(nodes_G_99.tolist())
-        # Per-query precision, recall, NDCG
-        top_K_set = set(top_100_neighbors)
+            prec_G    = len(rel_G)    / K
+            prec_G_99 = len(rel_G_99) / K
+            rec_G     = len(rel_G)    / 100
+            rec_G_99  = len(rel_G_99) / 100
 
-        prec_G     = len(rel_G)    / K
-        prec_G_99  = len(rel_G_99) / K
-        rec_G      = len(rel_G)    / 100
-        rec_G_99   = len(rel_G_99) / 100
+            results['q'].append(q_id)
+            results['source'].append(random_source)
+            results['beam_width'].append(beam_width)
+            results['number_of_results'].append(K)
+            results['top_K_full'].append(nodes_G.tolist())
+            results['top_K_partial'].append(nodes_G_99.tolist())
+            results['relevant_full'].append(rel_G.tolist())
+            results['relevant_partial'].append(rel_G_99.tolist())
+            results['precision_full'].append(prec_G)
+            results['precision_partial'].append(prec_G_99)
+            results['recall_full'].append(rec_G)
+            results['recall_partial'].append(rec_G_99)
+            results['seen_full'].append(seen_G)
+            results['seen_partial'].append(seen_G_99)
+            results['expanded_full'].append(expanded_G)
+            results['expanded_partial'].append(expanded_G_99)
 
-        results['relevant_full'].append(rel_G.tolist())
-        results['relevant_partial'].append(rel_G_99.tolist())
-        results['precision_full'].append(prec_G)
-        results['precision_partial'].append(prec_G_99)
-        results['recall_full'].append(rec_G)
-        results['recall_partial'].append(rec_G_99)
-        results['seen_full'].append(seen_G)
-        results['seen_partial'].append(seen_G_99)
-        results['expanded_full'].append(expanded_G)
-        results['expanded_partial'].append(expanded_G_99)
-    
-    df = pd.DataFrame(results)
+        return pd.DataFrame(results)
 
-    summary = pd.DataFrame({
-        'metric': ['avg precision', 'avg recall', 'avg nodes seen', 'avg nodes expanded'],
-        'G':    [df['precision_full'].mean(),    df['recall_full'].mean(),
-                 df['seen_full'].mean(),          df['expanded_full'].mean()],
-        'G_99': [df['precision_partial'].mean(), df['recall_partial'].mean(),
-                 df['seen_partial'].mean(),       df['expanded_partial'].mean()],
-    })
+    def print_summary(df, label):
+        summary = pd.DataFrame({
+            'metric': ['avg precision', 'avg recall', 'avg nodes seen', 'avg nodes expanded'],
+            'G':    [df['precision_full'].mean(),    df['recall_full'].mean(),
+                     df['seen_full'].mean(),          df['expanded_full'].mean()],
+            'G_99': [df['precision_partial'].mean(), df['recall_partial'].mean(),
+                     df['seen_partial'].mean(),       df['expanded_partial'].mean()],
+        })
+        print(f"\n=== {label} ===")
+        print(summary.to_string(index=False))
 
-    print(summary.to_string(index=False))
-    df.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}.csv", index=False)
-    # summary.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_summary.csv", index=False)
+    # --- Train queries (sampled from X, ground truth computed on the fly) ---
+    train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=1000, replace=False))
+    print(f"\nSearching train queries (n=1000)...")
+    df_train = run_search(X[train_indices], ground_truth=None, query_indices=train_indices)
+    print_summary(df_train, "Train queries")
+    df_train.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_train.csv", index=False)
+
+    # --- Test queries (Y, ground truth from Y_top_100) ---
+    print(f"\nSearching test queries (n={Y.shape[0]})...")
+    df_test = run_search(Y, ground_truth=Y_top_100, query_indices=None)
+    print_summary(df_test, "Test queries")
+    df_test.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_test.csv", index=False)
     
 
 def load_graphs(adj_list_path, n):
