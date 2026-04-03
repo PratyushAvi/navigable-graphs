@@ -58,7 +58,7 @@ def main():
     print(f"Loading {DATASET}")
     data = h5py.File(DATASET['filepath'], 'r')
 
-    X = data['train']
+    X = data['train'][:]
     n = X.shape[0]
 
     print("Computing distances...")
