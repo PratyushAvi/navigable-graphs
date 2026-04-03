@@ -16,13 +16,13 @@ def classicBeamSearch(source, target, G, d_q, b, k):
     """
     D = set([source])
     C = [(d_q[source], source)] # min-heap
-    B = [(d_q[source], source)] # max-heap
+    B = [(-d_q[source], source)] # max-heap
     nodes_expanded = 0
 
     while C:
         dist, node = heappop(C)
         nodes_expanded += 1
-        if len(B) == b and B[0][0] <= dist:
+        if len(B) == b and -1 * B[0][0] <= dist:
             break
 
         for y in G.successors(node):
