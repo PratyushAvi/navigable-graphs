@@ -55,6 +55,7 @@ def main():
         'adj_list': args.adj_list
     }
 
+    print(f"Loading {DATASET}")
     data = h5py.File(DATASET['filepath'], 'r')
 
     X = data['train']
@@ -65,6 +66,7 @@ def main():
     beam_width = 10
     top_100_neighbors = rankdata(D, method='ordinal', axis=1)[:, K]
 
+    print(f"Building networkx graphs...")
     G, G_99 = load_graphs(args.adj_list, n)
 
     queries = np.sort(np.random.choice(np.arange(X.shape[0]), size=10, replace=False))
@@ -135,3 +137,5 @@ def load_graphs(adj_list_path, n):
 
     return G, G_99
 
+if __name__ == '__main__':
+    main()
