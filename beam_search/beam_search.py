@@ -29,8 +29,8 @@ def classicBeamSearch(source, target, G, d_q, b, k):
             if y not in D:
                 D.add(y)
                 if len(B) < b or B[0][0] > d_q[y]:
-                    heappush(B, (d_q[y], y))
-                    heappush(C, (d_q[y], y))
+                    heappush(B, (-d_q[y], y))
+                    heappush(C, (-d_q[y], y))
 
                     if len(B) == b + 1:
                         heappop(B)
