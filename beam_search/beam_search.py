@@ -182,13 +182,13 @@ def main():
     print(f"\nSearching train queries (n=1000)...")
     df_train = run_search(X[train_indices], ground_truth=None, query_indices=train_indices)
     print_summary(df_train, "Train queries")
-    df_train.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_train.csv", index=False)
+    # df_train.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_train.csv", index=False)
 
     # --- Test queries (Y, ground truth from Y_top_100) ---
     print(f"\nSearching test queries (n={Y.shape[0]})...")
     df_test = run_search(Y, ground_truth=Y_top_100, query_indices=None)
     print_summary(df_test, "Test queries")
-    df_test.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_test.csv", index=False)
+    # df_test.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_test.csv", index=False)
 
     # --- Summary CSV (one row per run, append if exists) ---
     summary_row = {
