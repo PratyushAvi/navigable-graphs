@@ -15,8 +15,8 @@ def classicBeamSearch(source, target, G, d_q, b, k):
     k:   number of nearest neighbours to return
     """
     D = set([source])
-    C = [(d_q[source], source)]
-    B = [(d_q[source], source)]
+    C = [(d_q[source], source)] # min-heap
+    B = [(d_q[source], source)] # max-heap
     nodes_expanded = 0
 
     while C:
@@ -30,7 +30,7 @@ def classicBeamSearch(source, target, G, d_q, b, k):
                 D.add(y)
                 if len(B) < b or B[0][0] > d_q[y]:
                     heappush(B, (-d_q[y], y))
-                    heappush(C, (-d_q[y], y))
+                    heappush(C, (d_q[y], y))
 
                     if len(B) == b + 1:
                         heappop(B)
