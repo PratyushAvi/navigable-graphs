@@ -89,7 +89,7 @@ def main():
     }
 
     print("Performing Search...")
-    for q in tqdm(queries):
+    for q in queries:
         # Distances from every point to query q — one vectorized BLAS call
         d_q = cdist(X[q:q+1], X, metric='sqeuclidean').ravel()
 
@@ -104,6 +104,8 @@ def main():
 
         rel_G    = np.intersect1d(nodes_G,    top_100_neighbors)
         rel_G_99 = np.intersect1d(nodes_G_99, top_100_neighbors)
+
+        print(len(rel_G), len(rel_G_99))
 
         results['q'].append(q)
         results['source'].append(random_source)
@@ -133,7 +135,7 @@ def main():
     df = pd.DataFrame(results)
 
     summary = pd.DataFrame({
-        'metric': ['avg precision', 'avg recall', 'avg NDCG', 'avg nodes seen', 'avg nodes expanded'],
+        'metric': ['avg precision', 'avg recall', 'avg nodes seen', 'avg nodes expanded'],
         'G':    [df['precision_full'].mean(),    df['recall_full'].mean(),
                  df['seen_full'].mean(),          df['expanded_full'].mean()],
         'G_99': [df['precision_partial'].mean(), df['recall_partial'].mean(),
