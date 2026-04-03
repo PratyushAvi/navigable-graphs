@@ -44,6 +44,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--adj_list", required=True, help="Adjacency list file")
     parser.add_argument("--dataset", required=True, help="Dataset file")
+    parser.add_argument("--save_path", required=True, help="Place to save CSV")
     args = parser.parse_args()
 
     splits = args.dataset.split("/")[-1].split("-")
@@ -63,9 +64,9 @@ def main():
     print(f"Building networkx graphs...")
     G, G_99 = load_graphs(args.adj_list, n)
 
-    queries = np.sort(np.random.choice(np.arange(X.shape[0]), size=10, replace=False))
-    K = 10
-    beam_width = 10
+    queries = np.sort(np.random.choice(np.arange(X.shape[0]), size=1000, replace=False))
+    K = 50
+    beam_width = 100
     random_source = np.random.randint(0, X.shape[0])
 
     results = {
@@ -88,7 +89,6 @@ def main():
         # Distances from every point to query q — one vectorized BLAS call
         d_q = cdist(X[q:q+1], X, metric='sqeuclidean').ravel()
 
-        # Top-100 ground truth for free from the same array
         top_100_neighbors = np.argsort(d_q)[:101]
         top_100_neighbors = top_100_neighbors[top_100_neighbors != q][:100]
 
@@ -116,7 +116,7 @@ def main():
     
     df = pd.DataFrame(results)
     print(df)
-    df.to_csv(f"{args.adj_list}/beam_search_{DATASET['name']}.csv")
+    df.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}.csv")
 
 def load_graphs(adj_list_path, n):
     import ast
