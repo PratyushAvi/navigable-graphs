@@ -8,20 +8,18 @@
 #SBATCH --mail-user=pa2439@nyu.edu
 #SBATCH --account=torch_pr_929_general
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=128GB
-#SBATCH --time=24:00:00
+#SBATCH --time=6:00:00
 #SBATCH --output=slurm_out/slurm_%j_coordinator.out
 
 # --- Worker nodes — component 1 ---
 #SBATCH hetjob
 #SBATCH --nodes=8
-#SBATCH --ntasks=8
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256GB
-#SBATCH --time=24:00:00
+#SBATCH --time=6:00:00
 #SBATCH --output=slurm_out/slurm_%j_worker%t.out
 
 SIF=/share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif
@@ -51,7 +49,7 @@ srun --het-group=0 $SING /bin/bash -c "
         --data $SCRATCH/ANN-Search/datasets/spacev1b \
 	--save_path $SCRATCH/ANN-Search/navigable_graph_results \
         --num_points 10000 \
-        --batch 50 \
+        --batch 100 \
         --num_shards 8 \
         --cpus 32 \
         --coordinator_cpus 32
