@@ -23,7 +23,7 @@ export OPENBLAS_NUM_THREADS=32
 # Node 0 is the head; derive its IP
 NODES=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
 HEAD_NODE=${NODES[0]}
-HEAD_IP=$(getent hosts $HEAD_NODE | awk '{print $1}')
+HEAD_IP=$(ssh $HEAD_NODE hostname -I | awk '{print $2}')
 RAY_PORT=6379
 
 echo "Head node: $HEAD_NODE ($HEAD_IP)"
