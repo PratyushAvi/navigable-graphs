@@ -221,9 +221,14 @@ def main():
     }
     summary_path = f"{args.save_path}/beam_search_summary.csv"
     summary_df = pd.DataFrame([summary_row])
-    write_header = not os.path.exists(summary_path)
-    summary_df.to_csv(summary_path, mode='a', header=write_header, index=False)
-    print(f"\nSummary appended to {summary_path}")
+    if os.path.exists(summary_path):
+        existing = pd.read_csv(summary_path)
+        existing = existing[existing['dataset'] != DATASET['name']]
+        summary_df = pd.concat([existing, summary_df], ignore_index=True)
+        summary_df.to_csv(summary_path, index=False)
+    else:
+        summary_df.to_csv(summary_path, index=False)
+    print(f"\nSummary written to {summary_path}")
     
 
 def load_graphs(adj_list_path, n):
