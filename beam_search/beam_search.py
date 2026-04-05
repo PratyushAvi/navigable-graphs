@@ -76,7 +76,7 @@ def main():
     beam_width = 150
     random_source = np.random.randint(0, X.shape[0])
 
-    def run_search(query_vectors, ground_truth, query_indices=None):
+    def run_search(query_vectors, query_indices=None):
         """
         query_vectors: (m, d) array of query points
         ground_truth:  (m, 100) array of true neighbor indices, or None (compute from X)
@@ -110,12 +110,7 @@ def main():
         for i, qvec in enumerate(tqdm(query_vectors)):
             d_q = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
 
-            if ground_truth is not None:
-                top_100_neighbors = ground_truth[i][:100]
-            else:
-                q = query_indices[i]
-                top_100_neighbors = np.argsort(d_q)[:101]
-                top_100_neighbors = top_100_neighbors[top_100_neighbors != q][:100]
+            top_100_neighbors = np.argsort(d_q)[:100]
 
             q_id = query_indices[i] if query_indices is not None else i
             tgt  = q_id if query_indices is not None else -1
@@ -180,13 +175,13 @@ def main():
     # --- Train queries (sampled from X, ground truth computed on the fly) ---
     train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=1000, replace=False))
     print(f"\nSearching train queries (n=1000)...")
-    df_train = run_search(X[train_indices], ground_truth=None, query_indices=train_indices)
+    df_train = run_search(X[train_indices], query_indices=train_indices)
     print_summary(df_train, "Train queries")
     # df_train.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_train.csv", index=False)
 
     # --- Test queries (Y, ground truth computed on the fly) ---
     print(f"\nSearching test queries (n={Y.shape[0]})...")
-    df_test = run_search(Y, ground_truth=None, query_indices=None)
+    df_test = run_search(Y, query_indices=None)
     print_summary(df_test, "Test queries")
     # df_test.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_test.csv", index=False)
 
