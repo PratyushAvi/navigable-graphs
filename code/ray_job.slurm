@@ -1,26 +1,17 @@
 #!/bin/bash
-# Heterogeneous job: component 0 = head/coordinator (1 node), component 1 = workers (8 nodes)
+# 9 nodes total: node 0 = Ray head + coordinator, nodes 1-8 = Ray workers
 # Submit: sbatch ray_job.slurm
 
-# --- Head node (coordinator) — component 0 ---
 #SBATCH --job-name=nvgbl-ray
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=pa2439@nyu.edu
 #SBATCH --account=torch_pr_929_general
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128GB
-#SBATCH --time=6:00:00
-#SBATCH --output=slurm_out/slurm_%j_coordinator.out
-
-# --- Worker nodes — component 1 ---
-#SBATCH hetjob
-#SBATCH --nodes=8
+#SBATCH --nodes=9
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256GB
-#SBATCH --time=6:00:00
-#SBATCH --output=slurm_out/slurm_%j_worker%t.out
+#SBATCH --time=24:00:00
+#SBATCH --output=slurm_out/slurm_%j_node%t.out
 
 SIF=/share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif
 OVERLAY=$SCRATCH/envs/overlay-15GB-500K.ext3
@@ -29,15 +20,17 @@ SING="singularity exec --fakeroot --overlay ${OVERLAY}:ro ${SIF}"
 export OMP_NUM_THREADS=32
 export OPENBLAS_NUM_THREADS=32
 
-# Get the IP of the head node (het-group 0, task 0)
-HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST_HET_GROUP_0" | head -n1)  # component 0 = head
+# Node 0 is the head; derive its IP
+NODES=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
+HEAD_NODE=${NODES[0]}
 HEAD_IP=$(getent hosts $HEAD_NODE | awk '{print $1}')
 RAY_PORT=6379
 
 echo "Head node: $HEAD_NODE ($HEAD_IP)"
+echo "All nodes: ${NODES[@]}"
 
-# Start Ray head on group 0
-srun --het-group=0 $SING /bin/bash -c "
+# Start Ray head on node 0 and launch the coordinator script
+srun --nodes=1 --ntasks=1 --nodelist=$HEAD_NODE $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
     ray start --head \
@@ -47,7 +40,7 @@ srun --het-group=0 $SING /bin/bash -c "
         --disable-usage-stats && \
     python /scratch/pa2439/ANN-Search/navigable_graph_results/code/distributed_robust_prune.py \
         --data $SCRATCH/ANN-Search/datasets/spacev1b \
-	--save_path $SCRATCH/ANN-Search/navigable_graph_results \
+        --save_path $SCRATCH/ANN-Search/navigable_graph_results \
         --num_points 10000 \
         --batch 100 \
         --num_shards 8 \
@@ -58,8 +51,9 @@ srun --het-group=0 $SING /bin/bash -c "
 # Give head a moment to bind the port before workers connect
 sleep 15
 
-# Start Ray workers on component 1
-srun --het-group=1 $SING /bin/bash -c "
+# Start Ray workers on nodes 1-8
+WORKER_NODES=$(IFS=,; echo "${NODES[*]:1}")
+srun --nodes=8 --ntasks=8 --nodelist=$WORKER_NODES $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
     ray start \
