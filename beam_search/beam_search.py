@@ -184,9 +184,9 @@ def main():
     print_summary(df_train, "Train queries")
     # df_train.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_train.csv", index=False)
 
-    # --- Test queries (Y, ground truth from Y_top_100) ---
+    # --- Test queries (Y, ground truth computed on the fly) ---
     print(f"\nSearching test queries (n={Y.shape[0]})...")
-    df_test = run_search(Y, ground_truth=Y_top_100, query_indices=None)
+    df_test = run_search(Y, ground_truth=None, query_indices=None)
     print_summary(df_test, "Test queries")
     # df_test.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_test.csv", index=False)
 
