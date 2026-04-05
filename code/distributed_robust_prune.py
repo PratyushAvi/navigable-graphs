@@ -424,9 +424,9 @@ class WorkerActor(Worker):
 
 @ray.remote
 class CoordinatorActor(Coordinator):
-    def __init__(self, EFS_PATH, num_points, batch, workers):
+    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch, workers):
         self.workers = workers
-        super().__init__(EFS_PATH, num_points, batch)
+        super().__init__(EFS_PATH, SAVE_PATH, num_points, batch)
 
 
 if __name__ == '__main__':
