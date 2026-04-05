@@ -88,7 +88,7 @@ class Coordinator:
         self.uncov_current = {}   # vec_id -> current total uncov
         self.point_state   = {}   # vec_id -> 'INIT' | 'UPDATE'
 
-        with open(f"{self.SAVE_PATH}/spacev1b-euclidean-computed.txt.txt", "r") as f:
+        with open(f"{self.SAVE_PATH}/spacev1b-euclidean-computed.txt", "r") as f:
             for p in f.readlines():
                 self.computed.add(int(p.strip()))
 
