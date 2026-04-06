@@ -10,7 +10,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256GB
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=slurm_out/slurm_%j_node%t.out
 
 SIF=/share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif
@@ -42,7 +42,7 @@ srun --nodes=1 --ntasks=1 --nodelist=$HEAD_NODE $SING /bin/bash -c "
         --data $SCRATCH/ANN-Search/datasets/spacev1b \
         --save_path $SCRATCH/ANN-Search/navigable_graph_results/new_results \
         --num_points 10000 \
-        --batch 100 \
+        --batch 50 \
         --num_shards 8 \
         --cpus 32 \
         --coordinator_cpus 32

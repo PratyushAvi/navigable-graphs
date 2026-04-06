@@ -19,7 +19,7 @@ def main():
     dataset_records = pd.read_csv("/scratch/pa2439/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
     for d in dataset_records:
         DATASETS[d['name']] = d
-    SAVEPATH = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/new_results"
+    SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
     adjLists = glob.glob(f"{SAVEPATH}/adj*")
     
     # Load existing stats if available
