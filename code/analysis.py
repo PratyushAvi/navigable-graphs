@@ -23,7 +23,7 @@ def main():
     adjLists = glob.glob(f"{SAVEPATH}/adj*")
     
     # Load existing stats if available
-    stats_file = "/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/99p_stats.csv"
+    stats_file = "/scratch/pa2439/ANN-Search/navigable_graph_results/99p_stats.csv"
     if os.path.exists(stats_file):
         existing_stats = pd.read_csv(stats_file)
         stats_dict = {}
