@@ -1,0 +1,2 @@
+dataset,metric,dimensions,points computed,total points,mean out degree,median out degree,median in degree,min out degree,max out degree,min in degree,max in degree,avg edges to 99pct coverage
+spacev1b,euclidean,100,2531,1402020720,548.0,489.0,0.0,98,2786,0,3,17.16
