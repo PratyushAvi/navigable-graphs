@@ -85,22 +85,34 @@ def main():
         chunk = []
         edges_to_99pct_sum = 0   # accumulate across all nodes for this file
 
+        # spacev1b adj list lines have no source prefix; sources come from computed.txt in order
+        spacev1b_sources = None
+        if dataset_name == 'spacev1b':
+            computed_txt = f"{SAVEPATH}/spacev1b-euclidean-computed.txt"
+            with open(computed_txt, 'r') as cf:
+                spacev1b_sources = [int(p.strip()) for p in cf if p.strip()]
+            print(f"spacev1b: {len(spacev1b_sources)} points in computed.txt")
+
         print(f"Reading adjacency list...")
         with open(file, 'r') as f:
             first_line = f.readline().strip()
-            # Detect format: new format is "source [(n, uc), ...]", old is "s,n1,n2,..."
-            has_tuples = ' [' in first_line
+            # Detect format: new format has source prefix, old is "s,n1,n2,..."
+            has_tuples = '[' in first_line
             f.seek(0)
 
             for line in tqdm(f, desc=f"Processing edges", leave=False):
-                counter += 1
                 line = line.strip()
 
                 if has_tuples:
-                    # Format: "source [(neighbor, uncov_left), ...]"
-                    space = line.index(' ')
-                    source = int(line[:space])
-                    neighborhood = ast.literal_eval(line[space+1:])  # list of (neighbor, uncov)
+                    if spacev1b_sources is not None:
+                        # Format: "[(neighbor, uncov_left), ...]" — no source prefix
+                        source = spacev1b_sources[counter]
+                        neighborhood = ast.literal_eval(line)
+                    else:
+                        # Format: "source [(neighbor, uncov_left), ...]"
+                        space = line.index(' ')
+                        source = int(line[:space])
+                        neighborhood = ast.literal_eval(line[space+1:])  # list of (neighbor, uncov)
                     points = [source] + [nb for nb, _ in neighborhood]
 
                     # edges_to_99pct: first edge index where uncov_left <= 0.01 * n_nodes
@@ -114,6 +126,8 @@ def main():
                 else:
                     # Legacy format: "source,n1,n2,..."
                     points = [int(p.strip()) for p in line.split(',')]
+
+                counter += 1
 
                 chunk.append(points)
 

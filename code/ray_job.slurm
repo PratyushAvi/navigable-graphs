@@ -40,7 +40,7 @@ srun --nodes=1 --ntasks=1 --nodelist=$HEAD_NODE $SING /bin/bash -c "
         --disable-usage-stats && \
     python /scratch/pa2439/ANN-Search/navigable_graph_results/code/distributed_robust_prune.py \
         --data $SCRATCH/ANN-Search/datasets/spacev1b \
-        --save_path $SCRATCH/ANN-Search/navigable_graph_results \
+        --save_path $SCRATCH/ANN-Search/navigable_graph_results/new_results \
         --num_points 10000 \
         --batch 100 \
         --num_shards 8 \
