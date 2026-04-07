@@ -30,7 +30,7 @@ echo "Head node: $HEAD_NODE ($HEAD_IP)"
 echo "All nodes: ${NODES[@]}"
 
 # Start Ray head on node 0 and launch the coordinator script
-srun --nodes=1 --ntasks=1 --nodelist=$HEAD_NODE $SING /bin/bash -c "
+srun --nodes=1 --ntasks=1 --cpu-bind=none --nodelist=$HEAD_NODE $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
     ray start --head \
@@ -53,7 +53,7 @@ sleep 15
 
 # Start Ray workers on nodes 1-8
 WORKER_NODES=$(IFS=,; echo "${NODES[*]:1}")
-srun --nodes=8 --ntasks=8 --nodelist=$WORKER_NODES $SING /bin/bash -c "
+srun --nodes=8 --ntasks=8 --cpu-bind=none --nodelist=$WORKER_NODES $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
     ray start \
