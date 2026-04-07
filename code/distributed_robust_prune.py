@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--num_shards", type=int, default=17)
     parser.add_argument("--cpus", type=int, default=16)
     parser.add_argument("--coordinator_cpus", type=int, default=1)
+    parser.add_argument("--coverage", type=float, default=100.0, help="Just try to cover this percentage of the graph for each point")
     args = parser.parse_args()
 
     ray.init(address="auto", runtime_env={"env_vars": {"OMP_NUM_THREADS": str(args.cpus), "OPENBLAS_NUM_THREADS": str(args.cpus)}})
@@ -53,7 +54,8 @@ def main():
         SAVE_PATH=args.save_path,
         num_points=args.num_points,
         batch=args.batch,
-        workers=workers
+        workers=workers,
+        coverage=args.coverage
     )
     print("Waiting for coordinator to initialize...", flush=True)
     ray.get(coordinator.ready.remote())
@@ -67,12 +69,13 @@ def main():
 # ---------------------------------------------------------------------------
 
 class Coordinator:
-    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch):
+    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch, coverage):
         os.environ["RAY_DEDUP_LOGS"] = "0"
         self.EFS_PATH   = EFS_PATH
         self.SAVE_PATH = SAVE_PATH
         self.num_points = num_points
         self.batch      = batch
+        self.coverage = coverage
 
         self.vector_ids = np.load(f"{self.EFS_PATH}/ids.npy",      mmap_mode='r')
         self.dataset    = np.load(f"{self.EFS_PATH}/vectors.npy",   mmap_mode='r')
@@ -424,9 +427,9 @@ class WorkerActor(Worker):
 
 @ray.remote
 class CoordinatorActor(Coordinator):
-    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch, workers):
+    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch, workers, coverage):
         self.workers = workers
-        super().__init__(EFS_PATH, SAVE_PATH, num_points, batch)
+        super().__init__(EFS_PATH, SAVE_PATH, num_points, batch, coverage)
 
 
 if __name__ == '__main__':
