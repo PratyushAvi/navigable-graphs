@@ -75,8 +75,6 @@ def main():
     np.random.shuffle(all_sources)
 
     sources_to_process = [source for source in all_sources if source not in completed]
-    
-
 
     adj_path      = f"{SAVEPATH}/adj-list-{DATASET}-{metric}.txt"
     computed_path = f"{SAVEPATH}/{DATASET}-{metric}-computed.txt"
