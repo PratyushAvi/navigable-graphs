@@ -72,7 +72,7 @@ def main():
 
     print(f"Avg out-degrees\n--------------")
     for i, g in enumerate(G):
-        print(f"{coverage[i] * 100:>5.2f}% navigable:{g.number_of_edges() / n:<10.2f}")
+        print(f"{coverage[i] * 100}% navigable: {g.number_of_edges() / n}")
     print("--------------")
 
     K = 1
@@ -118,9 +118,11 @@ def main():
         summary_dict = collections.defaultdict(lambda: [])
         summary_dict['metric'] = ['avg recall', 'avg nodes seen', 'avg nodes expanded']
         for i, _ in enumerate(G):
-            summary_dict[f'G_{coverage[i]}'] = [df[f'recall_{coverage[i]}'].mean(),
-                     df[f'seen_{coverage[i]}'].mean(),       df[f'expanded_{coverage[i]}'].mean()],
-
+            summary_dict[f'G_{coverage[i]}'] = [
+                df[f'recall_{coverage[i]}'].mean(),
+                df[f'seen_{coverage[i]}'].mean(),       
+                df[f'expanded_{coverage[i]}'].mean()
+            ]
         summary = pd.DataFrame(summary_dict)
         print(f"\n=== {label} ===")
         print(summary.to_string(index=False))
