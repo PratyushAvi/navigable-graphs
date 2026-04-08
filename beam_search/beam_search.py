@@ -62,7 +62,6 @@ def main():
 
     X = data['train'][:]
     Y = data['test'][:]
-    Y_top_100 = data['neighbors'][:]
     n = X.shape[0]
 
     print(f"Building networkx graphs...")
@@ -70,11 +69,10 @@ def main():
     coverage = np.arange(1, 0.8, -0.005)
 
     G = load_graphs(args.adj_list, n, coverage)
-    print(coverage, len(G), G)
 
     print(f"Avg out-degrees\n--------------")
     for i, g in enumerate(G):
-        print(f"{coverage[i] * 100:>4}% navigable:{g.number_of_edges() / n:>3.2f}")
+        print(f"{coverage[i] * 100:>5}% navigable:{g.number_of_edges() / n:<10.2f}")
     print("--------------")
 
     K = 1
