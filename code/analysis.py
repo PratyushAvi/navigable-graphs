@@ -106,6 +106,8 @@ def main():
                 if has_tuples:
                     if spacev1b_sources is not None:
                         # Format: "[(neighbor, uncov_left), ...]" — no source prefix
+                        if counter >= len(spacev1b_sources):
+                            break
                         source = spacev1b_sources[counter]
                         neighborhood = ast.literal_eval(line)
                     else:
