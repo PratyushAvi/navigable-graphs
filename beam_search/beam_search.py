@@ -70,6 +70,7 @@ def main():
     coverage = np.arange(1.0, 0.8, -0.25)
 
     G = load_graphs(args.adj_list, n, coverage)
+    print(coverage, len(G), G)
 
     print(f"Avg out-degrees\n--------------")
     for i, g in enumerate(G):
