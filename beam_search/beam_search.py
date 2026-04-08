@@ -1,3 +1,4 @@
+import collections
 import os
 import numpy as np
 import networkx as nx
@@ -65,15 +66,18 @@ def main():
     n = X.shape[0]
 
     print(f"Building networkx graphs...")
-    G, G_99, G_90 = load_graphs(args.adj_list, n)
 
-    avg_deg_G    = G.number_of_edges()    / n
-    avg_deg_G_99 = G_99.number_of_edges() / n
-    avg_deg_G_90 = G_90.number_of_edges() / n
-    print(f"Avg out-degree — G: {avg_deg_G:.2f} | G_99: {avg_deg_G_99:.2f} | G_90: {avg_deg_G_90:.2f}")
+    coverage = np.arange(1.0, 0.8, -0.25)
 
-    K = 100
-    beam_width = 150
+    G = load_graphs(args.adj_list, n, coverage)
+
+    print(f"Avg out-degrees\n--------------")
+    for i, g in enumerate(G):
+        print(f"{coverage[i] * 100:>4}% navigable:{g.number_of_edges() / n:>3.2f}")
+    print("--------------")
+
+    K = 1
+    beam_width = 1
     random_source = np.random.randint(0, X.shape[0])
 
     def run_search(query_vectors, query_indices=None):
@@ -82,93 +86,43 @@ def main():
         ground_truth:  (m, 100) array of true neighbor indices, or None (compute from X)
         query_indices: if not None, indices into X (for train queries); distances exclude self
         """
-        results = {
-            'q': [],
-            'source': [],
-            'beam_width': [],
-            'number_of_results': [],
-            'top_K_full': [],
-            'top_K_99': [],
-            'top_K_90': [],
-            'relevant_full': [],
-            'relevant_99': [],
-            'relevant_90': [],
-            'precision_full': [],
-            'precision_99': [],
-            'precision_90': [],
-            'recall_full': [],
-            'recall_99': [],
-            'recall_90': [],
-            'seen_full': [],
-            'seen_99': [],
-            'seen_90': [],
-            'expanded_full': [],
-            'expanded_99': [],
-            'expanded_90': []
-        }
+        stats = collections.defaultdict(lambda: [])
 
         for i, qvec in enumerate(tqdm(query_vectors)):
             d_q = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
 
-            top_100_neighbors = np.argsort(d_q)[:100]
+            top_K_neighbors = np.argsort(d_q)[:K]
 
             q_id = query_indices[i] if query_indices is not None else i
             tgt  = q_id if query_indices is not None else -1
 
-            result_G,    expanded_G,    seen_G    = classicBeamSearch(random_source, tgt, G,    d_q, beam_width, K)
-            result_G_99, expanded_G_99, seen_G_99 = classicBeamSearch(random_source, tgt, G_99, d_q, beam_width, K)
-            result_G_90, expanded_G_90, seen_G_90 = classicBeamSearch(random_source, tgt, G_90, d_q, beam_width, K)
+            for i, g in enumerate(G):
+                result, expanded, seen = classicBeamSearch(random_source, tgt, g, d_q, beam_width, K)
+                nodes = np.array([node for _, node in result])
+                
+                relevant_nodes = np.intersect(nodes, top_K_neighbors)
+                recall = len(G) / K
+                
+                stats['q'].append(q_id)
+                stats['source'].append(random_source)
+                stats['beam_width'].append(beam_width)
+                stats['number_of_results'].append(K)
+                stats[f'top_K_{coverage[i]}'].append(nodes.tolist())
+                stats[f'relevant_{coverage[i]}'].append(relevant_nodes.tolist())
+                stats[f'recall_{coverage[i]}'].append(recall)
+                stats[f'seen_{coverage[i]}'].append(seen)
+                stats[f'expanded_{coverage[i]}'].append(expanded)
 
-            nodes_G    = np.array([node for _, node in result_G])
-            nodes_G_99 = np.array([node for _, node in result_G_99])
-            nodes_G_90 = np.array([node for _, node in result_G_90])
-
-            rel_G    = np.intersect1d(nodes_G,    top_100_neighbors)
-            rel_G_99 = np.intersect1d(nodes_G_99, top_100_neighbors)
-            rel_G_90 = np.intersect1d(nodes_G_90, top_100_neighbors)
-
-            prec_G    = len(rel_G)    / K
-            prec_G_99 = len(rel_G_99) / K
-            prec_G_90 = len(rel_G_90) / K
-            rec_G     = len(rel_G)    / 100
-            rec_G_99  = len(rel_G_99) / 100
-            rec_G_90  = len(rel_G_90) / 100
-
-            results['q'].append(q_id)
-            results['source'].append(random_source)
-            results['beam_width'].append(beam_width)
-            results['number_of_results'].append(K)
-            results['top_K_full'].append(nodes_G.tolist())
-            results['top_K_99'].append(nodes_G_99.tolist())
-            results['top_K_90'].append(nodes_G_90.tolist())
-            results['relevant_full'].append(rel_G.tolist())
-            results['relevant_99'].append(rel_G_99.tolist())
-            results['relevant_90'].append(rel_G_90.tolist())
-            results['precision_full'].append(prec_G)
-            results['precision_99'].append(prec_G_99)
-            results['precision_90'].append(prec_G_90)
-            results['recall_full'].append(rec_G)
-            results['recall_99'].append(rec_G_99)
-            results['recall_90'].append(rec_G_90)
-            results['seen_full'].append(seen_G)
-            results['seen_99'].append(seen_G_99)
-            results['seen_90'].append(seen_G_90)
-            results['expanded_full'].append(expanded_G)
-            results['expanded_99'].append(expanded_G_99)
-            results['expanded_90'].append(expanded_G_90)
-
-        return pd.DataFrame(results)
+        return pd.DataFrame(stats)
 
     def print_summary(df, label):
-        summary = pd.DataFrame({
-            'metric': ['avg precision', 'avg recall', 'avg nodes seen', 'avg nodes expanded'],
-            'G':    [df['precision_full'].mean(), df['recall_full'].mean(),
-                     df['seen_full'].mean(),       df['expanded_full'].mean()],
-            'G_99': [df['precision_99'].mean(),   df['recall_99'].mean(),
-                     df['seen_99'].mean(),         df['expanded_99'].mean()],
-            'G_90': [df['precision_90'].mean(),   df['recall_90'].mean(),
-                     df['seen_90'].mean(),         df['expanded_90'].mean()],
-        })
+        summary_dict = collections.defaultdict(lambda: [])
+        summary_dict['metric'] = ['avg recall', 'avg nodes seen', 'avg nodes expanded']
+        for i, _ in enumerate(G):
+            summary_dict[f'G_{coverage[i]}'] = [df[f'recall_{coverage[i]}'].mean(),
+                     df[f'seen_{coverage[i]}'].mean(),       df[f'expanded_{coverage[i]}'].mean()],
+
+        summary = pd.DataFrame(summary_dict)
         print(f"\n=== {label} ===")
         print(summary.to_string(index=False))
 
@@ -177,45 +131,23 @@ def main():
     print(f"\nSearching train queries (n=1000)...")
     df_train = run_search(X[train_indices], query_indices=train_indices)
     print_summary(df_train, "Train queries")
-    # df_train.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_train.csv", index=False)
-
-    # --- Test queries (Y, ground truth computed on the fly) ---
-    print(f"\nSearching test queries (n={Y.shape[0]})...")
-    df_test = run_search(Y, query_indices=None)
-    print_summary(df_test, "Test queries")
-    # df_test.to_csv(f"{args.save_path}/beam_search_{DATASET['name']}_test.csv", index=False)
 
     # --- Summary CSV (one row per run, append if exists) ---
     summary_row = {
-        'dataset':           DATASET['name'],
-        'beam_width':        beam_width,
-        'num_results':       K,
-        'avg_edges':         avg_deg_G,
-        'avg_edges_99':      avg_deg_G_99,
-        'avg_edges_90':      avg_deg_G_90,
-        # train
-        'train_recall_G':    df_train['recall_full'].mean(),
-        'train_recall_99':   df_train['recall_99'].mean(),
-        'train_recall_90':   df_train['recall_90'].mean(),
-        'train_seen_G':      df_train['seen_full'].mean(),
-        'train_seen_99':     df_train['seen_99'].mean(),
-        'train_seen_90':     df_train['seen_90'].mean(),
-        'train_expanded_G':  df_train['expanded_full'].mean(),
-        'train_expanded_99': df_train['expanded_99'].mean(),
-        'train_expanded_90': df_train['expanded_90'].mean(),
-        # test
-        'test_recall_G':     df_test['recall_full'].mean(),
-        'test_recall_99':    df_test['recall_99'].mean(),
-        'test_recall_90':    df_test['recall_90'].mean(),
-        'test_seen_G':       df_test['seen_full'].mean(),
-        'test_seen_99':      df_test['seen_99'].mean(),
-        'test_seen_90':      df_test['seen_90'].mean(),
-        'test_expanded_G':   df_test['expanded_full'].mean(),
-        'test_expanded_99':  df_test['expanded_99'].mean(),
-        'test_expanded_90':  df_test['expanded_90'].mean(),
+        'dataset':     DATASET['name'],
+        'beam_width':  beam_width,
+        'num_results': K,
     }
-    summary_path = f"{args.save_path}/beam_search_summary.csv"
+    for i, g in enumerate(G):
+        summary_row[f'avg_edges_{coverage[i]}'] = g.number_of_edges() / n
+    for i, _ in enumerate(G):
+        summary_row[f'train_recall_{coverage[i]}']   = df_train[f'recall_{coverage[i]}'].mean()
+        summary_row[f'train_seen_{coverage[i]}']     = df_train[f'seen_{coverage[i]}'].mean()
+        summary_row[f'train_expanded_{coverage[i]}'] = df_train[f'expanded_{coverage[i]}'].mean()
+
     summary_df = pd.DataFrame([summary_row])
+    summary_path = f"{args.save_path}/beam_search_summary.csv"
+
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
         existing = existing[existing['dataset'] != DATASET['name']]
@@ -224,20 +156,13 @@ def main():
     else:
         summary_df.to_csv(summary_path, index=False)
     print(f"\nSummary written to {summary_path}")
-    
 
-def load_graphs(adj_list_path, n):
+def load_graphs(adj_list_path, n, coverages):
     import ast
 
-    G    = nx.DiGraph()
-    G_99 = nx.DiGraph()
-    G_90 = nx.DiGraph()
-    G.add_nodes_from(range(n))
-    G_99.add_nodes_from(range(n))
-    G_90.add_nodes_from(range(n))
-
-    threshold_99 = 0.01 * n
-    threshold_90 = 0.10 * n
+    G    = [nx.DiGraph()] * len(coverages)
+    for g in G:
+        g.add_nodes_from(range(n))
 
     with open(adj_list_path, 'r') as f:
         for line in tqdm(f):
@@ -249,13 +174,11 @@ def load_graphs(adj_list_path, n):
             neighborhood = ast.literal_eval(line[space + 1:])   # [(neighbor, uncov), ...]
 
             for neighbor, uncov in neighborhood:
-                G.add_edge(source, neighbor)
-                if uncov > threshold_99:
-                    G_99.add_edge(source, neighbor)
-                if uncov > threshold_90:
-                    G_90.add_edge(source, neighbor)
+                for i, g in enumerate(G):
+                    if uncov > (n * coverages[i]):
+                        g.add_edge(source, neighbor)
 
-    return G, G_99, G_90
+    return G
 
 if __name__ == '__main__':
     main()
