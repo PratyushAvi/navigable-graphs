@@ -51,6 +51,7 @@ def main():
     parser.add_argument("--num_results", type=int, default=1, help="Number of nearest neighbours to return (K)")
     parser.add_argument("--step_size", type=float, default=1, help="Coverage decrement step size")
     parser.add_argument("--min_coverage", type=float, default=90, help="Minimum coverage amount")
+    parser.add_argument("--tests", type=int, default=100, help="Number of tests")
     args = parser.parse_args()
 
     splits = args.dataset.split("/")[-1].split("-")
@@ -132,8 +133,8 @@ def main():
         print(summary.to_string(index=False))
 
     # --- Train queries (sampled from X, ground truth computed on the fly) ---
-    train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=100, replace=False))
-    print(f"\nSearching train queries (n=1000)...")
+    train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=args.tests, replace=False))
+    print(f"\nSearching train queries (n={args.tests})...")
     df_train = run_search(X[train_indices], query_indices=train_indices)
     print_summary(df_train, "Train queries")
 
