@@ -1,2 +1,7 @@
 dataset,metric,dimensions,points computed,total points,mean out degree,median out degree,median in degree,min out degree,max out degree,min in degree,max in degree,avg edges to 99pct coverage
-spacev1b,euclidean,100,4016,1402020720,551.01,497.0,0.0,91,2984,0,3,17.17
+coco_i2i,euclidean,512,113287,113287,28.59,27.0,24.0,2,131,1,268,11.27
+coco_t2i,euclidean,512,113287,113287,28.59,27.0,24.0,2,131,1,268,11.27
+fashion_mnist,euclidean,784,60000,60000,13.55,12.0,12.0,1,108,1,117,5.85
+glove25,euclidean,25,1028100,1183514,50.4,50.0,37.0,1,141,0,366,6.77
+mnist,euclidean,784,60000,60000,19.64,19.0,17.0,2,67,1,134,8.86
+spacev1b,euclidean,100,7410,1402020720,554.76,499.0,0.0,85,2984,0,3,17.26
