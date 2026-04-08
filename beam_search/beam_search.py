@@ -100,7 +100,7 @@ def main():
                 result, expanded, seen = classicBeamSearch(random_source, tgt, g, d_q, beam_width, K)
                 nodes = np.array([node for _, node in result])
                 
-                relevant_nodes = np.intersect(nodes, top_K_neighbors)
+                relevant_nodes = np.intersect1d(nodes, top_K_neighbors)
                 recall = len(G) / K
                 
                 stats['q'].append(q_id)
@@ -160,7 +160,7 @@ def main():
 def load_graphs(adj_list_path, n, coverages):
     import ast
 
-    G    = [nx.DiGraph()] * len(coverages)
+    G = [nx.DiGraph() for _ in range(len(coverages))]
     for g in G:
         g.add_nodes_from(range(n))
 
