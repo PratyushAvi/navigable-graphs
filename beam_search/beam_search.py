@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--adj_list", required=True, help="Adjacency list file")
     parser.add_argument("--dataset", required=True, help="Dataset file")
     parser.add_argument("--save_path", required=True, help="Place to save CSV")
+    parser.add_argument("--beam_width", default=1, help="Beam width")
     args = parser.parse_args()
 
     splits = args.dataset.split("/")[-1].split("-")
@@ -75,8 +76,8 @@ def main():
         print(f"{coverage[i] * 100:0.1f}% navigable: {g.number_of_edges() / n:0.2f}")
     print("--------------")
 
-    K = 1
-    beam_width = 1
+    K = args.beam_width
+    beam_width = args.beam_width
     random_source = np.random.randint(0, X.shape[0])
 
     def run_search(query_vectors, query_indices=None):
