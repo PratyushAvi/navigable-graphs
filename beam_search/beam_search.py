@@ -94,6 +94,10 @@ def main():
 
             q_id = query_indices[i] if query_indices is not None else i
             tgt  = q_id if query_indices is not None else -1
+            stats['q'].append(q_id)
+            stats['source'].append(random_source)
+            stats['beam_width'].append(beam_width)
+            stats['number_of_results'].append(K)
 
             for i, g in enumerate(G):
                 result, expanded, seen = classicBeamSearch(random_source, tgt, g, d_q, beam_width, K)
@@ -102,10 +106,6 @@ def main():
                 relevant_nodes = np.intersect1d(nodes, top_K_neighbors)
                 recall = len(G) / K
                 
-                stats['q'].append(q_id)
-                stats['source'].append(random_source)
-                stats['beam_width'].append(beam_width)
-                stats['number_of_results'].append(K)
                 stats[f'top_K_{coverage[i]}'].append(nodes.tolist())
                 stats[f'relevant_{coverage[i]}'].append(relevant_nodes.tolist())
                 stats[f'recall_{coverage[i]}'].append(recall)
@@ -126,7 +126,7 @@ def main():
         print(summary.to_string(index=False))
 
     # --- Train queries (sampled from X, ground truth computed on the fly) ---
-    train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=1000, replace=False))
+    train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=100, replace=False))
     print(f"\nSearching train queries (n=1000)...")
     df_train = run_search(X[train_indices], query_indices=train_indices)
     print_summary(df_train, "Train queries")
