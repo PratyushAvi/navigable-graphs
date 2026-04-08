@@ -66,13 +66,13 @@ def main():
 
     print(f"Building networkx graphs...")
 
-    coverage = np.arange(1, 0.9, -0.005)
+    coverage = np.arange(1, 0.9, -0.01)
 
     G = load_graphs(args.adj_list, n, coverage)
 
     print(f"Avg out-degrees\n--------------")
     for i, g in enumerate(G):
-        print(f"{coverage[i] * 100}% navigable: {g.number_of_edges() / n}")
+        print(f"{coverage[i] * 100:0.1f}% navigable: {g.number_of_edges() / n:0.2f}")
     print("--------------")
 
     K = 1
@@ -104,7 +104,7 @@ def main():
                 nodes = np.array([node for _, node in result])
                 
                 relevant_nodes = np.intersect1d(nodes, top_K_neighbors)
-                recall = len(G) / K
+                recall = len(relevant_nodes) / K
                 
                 stats[f'top_K_{coverage[i]}'].append(nodes.tolist())
                 stats[f'relevant_{coverage[i]}'].append(relevant_nodes.tolist())
