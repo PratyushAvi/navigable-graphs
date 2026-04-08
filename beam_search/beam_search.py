@@ -72,7 +72,7 @@ def main():
 
     print(f"Avg out-degrees\n--------------")
     for i, g in enumerate(G):
-        print(f"{coverage[i] * 100:>5}% navigable:{g.number_of_edges() / n:<10.2f}")
+        print(f"{coverage[i] * 100:>5.2f}% navigable:{g.number_of_edges() / n:<10.2f}")
     print("--------------")
 
     K = 1
@@ -174,7 +174,7 @@ def load_graphs(adj_list_path, n, coverages):
 
             for neighbor, uncov in neighborhood:
                 for i, g in enumerate(G):
-                    if uncov > (n * coverages[i]):
+                    if uncov > (n * (1 - coverages[i])):
                         g.add_edge(source, neighbor)
 
     return G
