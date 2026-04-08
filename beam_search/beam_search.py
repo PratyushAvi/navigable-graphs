@@ -66,7 +66,7 @@ def main():
 
     print(f"Building networkx graphs...")
 
-    coverage = np.arange(1, 0.8, -0.005)
+    coverage = np.arange(1, 0.9, -0.005)
 
     G = load_graphs(args.adj_list, n, coverage)
 
