@@ -66,7 +66,7 @@ def main():
 
     print(f"Building networkx graphs...")
 
-    coverage = np.arange(1, 0.9, -0.01)
+    coverage = [c / 100 for c in range(100, 90, -1)]
 
     G = load_graphs(args.adj_list, n, coverage)
 
@@ -102,8 +102,6 @@ def main():
             for i, g in enumerate(G):
                 result, expanded, seen = classicBeamSearch(random_source, tgt, g, d_q, beam_width, K)
                 nodes = np.array([node for _, node in result])
-
-                # print(nodes, top_K_neighbors)
                 
                 relevant_nodes = np.intersect1d(nodes, top_K_neighbors)
                 recall = len(relevant_nodes) / K
