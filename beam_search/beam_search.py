@@ -49,6 +49,8 @@ def main():
     parser.add_argument("--save_path", required=True, help="Place to save CSV")
     parser.add_argument("--beam_width", type=int, default=1, help="Beam width")
     parser.add_argument("--num_results", type=int, default=1, help="Number of nearest neighbours to return (K)")
+    parser.add_argument("--step_size", type=float, default=1, help="Coverage decrement step size")
+    parser.add_argument("--min_coverage", type=float, default=90, help="Minimum coverage amount")
     args = parser.parse_args()
 
     splits = args.dataset.split("/")[-1].split("-")
@@ -68,7 +70,7 @@ def main():
 
     print(f"Building networkx graphs...")
 
-    coverage = [c / 100 for c in range(100, 90, -1)]
+    coverage = [c / 100 for c in np.arange(100, args.min_coverage, -1 * args.step_size)]
 
     G = load_graphs(args.adj_list, n, coverage)
 
