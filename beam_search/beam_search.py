@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--dataset", required=True, help="Dataset file")
     parser.add_argument("--save_path", required=True, help="Place to save CSV")
     parser.add_argument("--beam_width", type=int, default=1, help="Beam width")
+    parser.add_argument("--num_results", type=int, default=1, help="Number of nearest neighbours to return (K)")
     args = parser.parse_args()
 
     splits = args.dataset.split("/")[-1].split("-")
@@ -76,7 +77,7 @@ def main():
         print(f"{coverage[i] * 100:0.1f}% navigable: {g.number_of_edges() / n:0.2f}")
     print("--------------")
 
-    K = 1
+    K = args.num_results
     beam_width = args.beam_width
     random_source = np.random.randint(0, X.shape[0])
 
@@ -152,7 +153,12 @@ def main():
 
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
-        existing = existing[existing['dataset'] != DATASET['name']]
+        mask = ~(
+            (existing['dataset']     == DATASET['name']) &
+            (existing['beam_width']  == beam_width) &
+            (existing['num_results'] == K)
+        )
+        existing = existing[mask]
         summary_df = pd.concat([existing, summary_df], ignore_index=True)
         summary_df.to_csv(summary_path, index=False)
     else:
