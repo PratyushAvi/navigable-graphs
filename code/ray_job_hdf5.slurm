@@ -65,9 +65,9 @@ srun --nodes=1 --ntasks=1 --cpu-bind=none --nodelist=$HEAD_NODE $SING /bin/bash 
 # Give head a moment to bind the port before workers connect
 sleep 15
 
-# Start Ray workers on nodes 1-8
+# Start Ray workers
 WORKER_NODES=$(IFS=,; echo "${NODES[*]:1}")
-srun --nodes=8 --ntasks=8 --cpu-bind=none --nodelist=$WORKER_NODES $SING /bin/bash -c "
+srun --nodes=${NUM_SHARDS} --cpu-bind=none --nodelist=$WORKER_NODES $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
     ray start \
