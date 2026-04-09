@@ -365,8 +365,8 @@ class Worker:
                 self.free_rows.append(row)
                 del self.uncov_indices[row]
 
-        # Compute distances — full matmul if any INIT, sparse matmul if pure UPDATE
-        D, union, vec_id_to_col, is_sparse = self._compute_dist(vecs, norms, vec_ids, inputs)
+        # Compute distances — always full dense matmul
+        D, vec_id_to_col = self._compute_dist(vecs, norms, vec_ids, inputs)
 
         # Pass 2: update uncovered sets, then pick next neighbor
         for vec_id, command, update_vec_id in inputs:
@@ -377,11 +377,7 @@ class Worker:
             ui  = self.uncov_indices[row]
             if len(ui) == 0:
                 continue
-            if is_sparse:
-                d_col_at_ui = D[col][np.searchsorted(union, ui)]
-            else:
-                d_col_at_ui = D[col][ui]
-            keep = self.dists_matrix[row][ui] <= d_col_at_ui
+            keep = self.dists_matrix[row][ui] <= D[col][ui]
             self.uncov_indices[row] = ui[keep]
 
         response = []
@@ -408,11 +404,9 @@ class Worker:
         print(f"[Worker {self.id}] message() done  elapsed={time.time()-t_msg:.2f}s", flush=True)
         return response, uncov_counts
 
-    SPARSE_THRESHOLD = 5_000_000
-
     def _compute_dist(self, vecs, norms, vec_ids, inputs):
         if not vec_ids:
-            return None, None, {}, False
+            return None, {}
 
         V = np.hstack([
             -2 * vecs,
@@ -421,45 +415,18 @@ class Worker:
         ])
 
         vec_id_to_col = {vec_id: i for i, vec_id in enumerate(vec_ids)}
-        init_ids      = [v for v, cmd, _ in inputs if cmd == 'INIT']
 
-        if init_ids:
-            print(f"[Worker {self.id}] _compute_dist INIT  shape=({len(vec_ids)}, {self.n})", flush=True)
-            t0 = time.time()
-            D  = V @ self.X.T  # (k, shard_size)
-            print(f"[Worker {self.id}] _compute_dist INIT matmul done  elapsed={time.time()-t0:.2f}s", flush=True)
-            for vec_id in init_ids:
-                row = self.active_ids.get(vec_id)
-                if row is not None:
-                    self.dists_matrix[row] = D[vec_id_to_col[vec_id]]
-            return D, None, vec_id_to_col, False
-
-        # Pure UPDATE round: compute union of uncovered indices across all active rows
-        update_rows = [self.active_ids[v] for v, cmd, _ in inputs if cmd == 'UPDATE']
-        if not update_rows:
-            return None, None, vec_id_to_col, False
-
-        union_mask = np.zeros(self.n, dtype=np.bool_)
-        for row in update_rows:
-            ui = self.uncov_indices[row]
-            if len(ui) > 0:
-                union_mask[ui] = True
-        union = np.where(union_mask)[0].astype(np.int32)
-
-        if len(union) < self.SPARSE_THRESHOLD:
-            print(f"[Worker {self.id}] _compute_dist SPARSE  union={len(union):,}  "
-                  f"shape=({len(vec_ids)}, {len(union)})", flush=True)
-            t0    = time.time()
-            D_sub = V @ self.X[union].T
-            print(f"[Worker {self.id}] _compute_dist SPARSE matmul done  elapsed={time.time()-t0:.2f}s", flush=True)
-            return D_sub, union, vec_id_to_col, True
-
-        print(f"[Worker {self.id}] _compute_dist DENSE  union={len(union):,}  "
-              f"shape=({len(vec_ids)}, {self.n})", flush=True)
+        print(f"[Worker {self.id}] _compute_dist  shape=({len(vec_ids)}, {self.n})", flush=True)
         t0 = time.time()
-        D  = V @ self.X.T
-        print(f"[Worker {self.id}] _compute_dist DENSE matmul done  elapsed={time.time()-t0:.2f}s", flush=True)
-        return D, None, vec_id_to_col, False
+        D  = V @ self.X.T  # (k, shard_size)
+        print(f"[Worker {self.id}] _compute_dist matmul done  elapsed={time.time()-t0:.2f}s", flush=True)
+
+        for vec_id in (v for v, cmd, _ in inputs if cmd == 'INIT'):
+            row = self.active_ids.get(vec_id)
+            if row is not None:
+                self.dists_matrix[row] = D[vec_id_to_col[vec_id]]
+
+        return D, vec_id_to_col
 
 
 # ---------------------------------------------------------------------------
