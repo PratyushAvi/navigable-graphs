@@ -332,7 +332,14 @@ class Worker:
             else:
                 d_col_at_ui = D[col][ui]
             keep = self.dists_matrix[row][ui] <= d_col_at_ui
-            self.uncov_indices[row] = ui[keep]
+            ui   = ui[keep]
+            # Explicitly remove the waypoint itself — the pruning condition
+            # dist(source, w) <= dist(w, w)=0 is True when they are duplicates
+            # (dist=0), so the waypoint would otherwise never leave uncov.
+            local_wp = update_vec_id - self.start
+            if 0 <= local_wp < self.n:
+                ui = ui[ui != local_wp]
+            self.uncov_indices[row] = ui
 
         response = []
         for vec_id, command, _ in inputs:
