@@ -80,92 +80,99 @@ def main():
         print(f"{coverage[i] * 100:0.1f}% navigable: {g.number_of_edges() / n:0.2f}")
     print("--------------")
 
-    K = args.num_results
+    RECALL_KS  = [1, 10, 100]
+    K_search   = min(args.beam_width, 100)   # return up to 100 candidates
     beam_width = args.beam_width
     random_source = np.random.randint(0, X.shape[0])
 
     def run_search(query_vectors, query_indices=None):
         """
         query_vectors: (m, d) array of query points
-        ground_truth:  (m, 100) array of true neighbor indices, or None (compute from X)
-        query_indices: if not None, indices into X (for train queries); distances exclude self
+        query_indices: if not None, indices into X (for train queries)
+        Returns a dict: k -> DataFrame with per-query stats for that recall level.
         """
-        stats = collections.defaultdict(lambda: [])
+        # stats[k] holds per-query rows for recall@k
+        stats = {k: collections.defaultdict(list) for k in RECALL_KS}
 
         for i, qvec in enumerate(tqdm(query_vectors)):
-            d_q = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
-
-            top_K_neighbors = np.argsort(d_q)[:K]
-
+            d_q  = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
+            # ground truth top-100 (exclude self for train queries)
+            sorted_idx = np.argsort(d_q)
             q_id = query_indices[i] if query_indices is not None else i
             tgt  = q_id if query_indices is not None else -1
-            stats['q'].append(q_id)
-            stats['source'].append(random_source)
-            stats['beam_width'].append(beam_width)
-            stats['number_of_results'].append(K)
+            true_top = sorted_idx[sorted_idx != q_id][:100]
 
-            for i, g in enumerate(G):
-                result, expanded, seen = classicBeamSearch(random_source, tgt, g, d_q, beam_width, K)
-                nodes = np.array([node for _, node in result])
-                
-                relevant_nodes = np.intersect1d(nodes, top_K_neighbors)
-                recall = len(relevant_nodes) / K
-                
-                stats[f'top_K_{coverage[i]}'].append(nodes.tolist())
-                stats[f'relevant_{coverage[i]}'].append(relevant_nodes.tolist())
-                stats[f'recall_{coverage[i]}'].append(recall)
-                stats[f'seen_{coverage[i]}'].append(seen)
-                stats[f'expanded_{coverage[i]}'].append(expanded)
+            for gi, g in enumerate(G):
+                result, expanded, seen = classicBeamSearch(
+                    random_source, tgt, g, d_q, beam_width, K_search
+                )
+                # B is a max-heap of (-dist, node); sort ascending by dist
+                returned = np.array([node for _, node in sorted(result, key=lambda x: -x[0])])
 
-        return pd.DataFrame(stats)
+                for k in RECALL_KS:
+                    recall = len(np.intersect1d(returned[:k], true_top[:k])) / k
+                    stats[k][f'recall_{coverage[gi]}'].append(recall)
+                    stats[k][f'seen_{coverage[gi]}'].append(seen)
+                    stats[k][f'expanded_{coverage[gi]}'].append(expanded)
 
-    def print_summary(df, label):
-        summary_dict = collections.defaultdict(lambda: [])
-        summary_dict['metric'] = ['avg recall', 'avg nodes seen', 'avg nodes expanded']
-        for i, _ in enumerate(G):
-            summary_dict[f'G_{coverage[i]}'] = [
-                df[f'recall_{coverage[i]}'].mean(),
-                df[f'seen_{coverage[i]}'].mean(),       
-                df[f'expanded_{coverage[i]}'].mean()
-            ]
-        summary = pd.DataFrame(summary_dict)
-        print(f"\n=== {label} ===")
-        print(summary.to_string(index=False))
+            for k in RECALL_KS:
+                stats[k]['q'].append(q_id)
+                stats[k]['beam_width'].append(beam_width)
+                stats[k]['k'].append(k)
+
+        return {k: pd.DataFrame(stats[k]) for k in RECALL_KS}
+
+    def print_summary(dfs, label):
+        for k in RECALL_KS:
+            df = dfs[k]
+            summary_dict = collections.defaultdict(list)
+            summary_dict['metric'] = ['avg recall', 'avg nodes seen', 'avg nodes expanded']
+            for gi in range(len(G)):
+                summary_dict[f'G_{coverage[gi]}'] = [
+                    df[f'recall_{coverage[gi]}'].mean(),
+                    df[f'seen_{coverage[gi]}'].mean(),
+                    df[f'expanded_{coverage[gi]}'].mean(),
+                ]
+            summary = pd.DataFrame(summary_dict)
+            print(f"\n=== {label}  recall@{k} ===")
+            print(summary.to_string(index=False))
 
     # --- Train queries (sampled from X, ground truth computed on the fly) ---
     train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=args.tests, replace=False))
     print(f"\nSearching train queries (n={args.tests})...")
-    df_train = run_search(X[train_indices], query_indices=train_indices)
-    print_summary(df_train, "Train queries")
+    dfs_train = run_search(X[train_indices], query_indices=train_indices)
+    print_summary(dfs_train, "Train queries")
 
-    # --- Summary CSV (one row per run, append if exists) ---
-    summary_row = {
-        'dataset':     DATASET['name'],
-        'beam_width':  beam_width,
-        'num_results': K,
-    }
-    for i, g in enumerate(G):
-        summary_row[f'avg_edges_{coverage[i]}'] = g.number_of_edges() / n
-    for i, _ in enumerate(G):
-        summary_row[f'train_recall_{coverage[i]}']   = df_train[f'recall_{coverage[i]}'].mean()
-        summary_row[f'train_seen_{coverage[i]}']     = df_train[f'seen_{coverage[i]}'].mean()
-        summary_row[f'train_expanded_{coverage[i]}'] = df_train[f'expanded_{coverage[i]}'].mean()
+    # --- Summary CSV: one row per (dataset, beam_width, k), append if exists ---
+    summary_rows = []
+    for k in RECALL_KS:
+        df = dfs_train[k]
+        row = {
+            'dataset':    DATASET['name'],
+            'beam_width': beam_width,
+            'k':          k,
+        }
+        for gi, g in enumerate(G):
+            row[f'avg_edges_{coverage[gi]}']      = g.number_of_edges() / n
+            row[f'train_recall_{coverage[gi]}']   = df[f'recall_{coverage[gi]}'].mean()
+            row[f'train_seen_{coverage[gi]}']     = df[f'seen_{coverage[gi]}'].mean()
+            row[f'train_expanded_{coverage[gi]}'] = df[f'expanded_{coverage[gi]}'].mean()
+        summary_rows.append(row)
 
-    summary_df = pd.DataFrame([summary_row])
+    summary_df  = pd.DataFrame(summary_rows)
     summary_path = f"{args.save_path}/beam_search_summary.csv"
 
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
         mask = ~(
-            (existing['dataset']     == DATASET['name']) &
-            (existing['beam_width']  == beam_width) &
-            (existing['num_results'] == K)
+            (existing['dataset']    == DATASET['name']) &
+            (existing['beam_width'] == beam_width) &
+            (existing['k'].isin(RECALL_KS))
         )
-        existing = existing[mask]
-        summary_df = pd.concat([existing, summary_df], ignore_index=True)
-        summary_df.to_csv(summary_path, index=False)
-    else:
-        summary_df.to_csv(summary_path, index=False)
+        existing    = existing[mask]
+        summary_df  = pd.concat([existing, summary_df], ignore_index=True)
+
+    summary_df.to_csv(summary_path, index=False)
     print(f"\nSummary written to {summary_path}")
 
 def load_graphs(adj_list_path, n, coverages):
