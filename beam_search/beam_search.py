@@ -106,6 +106,7 @@ def main():
                     random_source, tgt, g, d_q, beam_width, K_search
                 )
                 # B is a max-heap of (-dist, node); sort ascending by dist
+                print(sorted(result, key=lambda x: -x[0]))
                 returned = np.array([node for _, node in sorted(result, key=lambda x: -x[0])])
 
                 for k in RECALL_KS:
