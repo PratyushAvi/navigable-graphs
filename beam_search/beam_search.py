@@ -48,7 +48,6 @@ def main():
     parser.add_argument("--dataset", required=True, help="Dataset file")
     parser.add_argument("--save_path", required=True, help="Place to save CSV")
     parser.add_argument("--beam_width", type=int, default=1, help="Beam width")
-    parser.add_argument("--num_results", type=int, default=1, help="Number of nearest neighbours to return (K)")
     parser.add_argument("--step_size", type=float, default=1, help="Coverage decrement step size")
     parser.add_argument("--min_coverage", type=float, default=90, help="Minimum coverage amount")
     parser.add_argument("--tests", type=int, default=100, help="Number of tests")
@@ -164,13 +163,11 @@ def main():
 
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
-        mask = ~(
-            (existing['dataset']    == DATASET['name']) &
-            (existing['beam_width'] == beam_width) &
-            (existing['k'].isin(RECALL_KS))
-        )
-        existing    = existing[mask]
-        summary_df  = pd.concat([existing, summary_df], ignore_index=True)
+        mask = (existing['dataset'] == DATASET['name']) & (existing['beam_width'] == beam_width)
+        if 'k' in existing.columns:
+            mask = mask & existing['k'].isin(RECALL_KS)
+        existing   = existing[~mask]
+        summary_df = pd.concat([existing, summary_df], ignore_index=True)
 
     summary_df.to_csv(summary_path, index=False)
     print(f"\nSummary written to {summary_path}")
