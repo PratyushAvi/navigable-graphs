@@ -114,6 +114,7 @@ class Coordinator:
         self.uncov_initial = {}
         self.uncov_current = {}
         self.point_state   = {}
+        self.degrees = []
 
         computed_path = self._computed_path()
         if os.path.exists(computed_path):
@@ -132,14 +133,13 @@ class Coordinator:
         return os.path.join(self.save_path, f"adj-list-{self.name}-euclidean.txt")
 
     def _fetch_vecs(self, indices):
-        """Fetch rows from the HDF5 dataset. h5py requires sorted indices."""
-        idx   = np.asarray(indices, dtype=np.int64)
-        order = np.argsort(idx)
-        vecs_sorted = self.h5_dataset[idx[order].tolist()].astype(np.float32)
-        # Restore original order
-        restore = np.empty_like(order)
-        restore[order] = np.arange(len(order))
-        return vecs_sorted[restore]
+        """Fetch rows from the HDF5 dataset.
+        h5py fancy indexing requires strictly increasing indices with no duplicates.
+        np.unique returns sorted unique values; inverse reconstructs original order."""
+        idx = np.asarray(indices, dtype=np.int64)
+        unique_idx, inverse = np.unique(idx, return_inverse=True)
+        vecs_unique = self.h5_dataset[unique_idx.tolist()].astype(np.float32)
+        return vecs_unique[inverse]
 
     def ready(self):
         return True
@@ -172,6 +172,7 @@ class Coordinator:
             for vec_id in list(self.active):
                 if vec_id not in responses or responses[vec_id] is None:
                     message.append((vec_id, 'KILL', None))
+                    self.degrees.append(len(self.neighborhoods[vec_id]))
                     self.writeNeighborhood(vec_id)
                     self.active.remove(vec_id)
                     self.computed.add(vec_id)
@@ -214,12 +215,14 @@ class Coordinator:
         rtt_avg = sum(self.rtt_history) / len(self.rtt_history)
         rtt_max = max(self.rtt_history)
 
+        avg_deg = np.mean(self.degrees) if self.degrees else np.inf
+
         lines = [
             f"\n[Round {self.round_num}] Took {self.rtt_history[-1]:.1f}s |\n"
             f"RTT min={rtt_min:.1f}s avg={rtt_avg:.1f}s max={rtt_max:.1f}s  "
             f"active={len(self.active)}  completed={len(self.computed)}\n"
-            f"goal ETA={(self.num_points - len(self.computed)) * rtt_avg * 1000 / self.batch:.2f}s "
-            f"(assuming max deg < 1000)"
+            f"goal ETA={(self.num_points - len(self.computed)) * rtt_avg * avg_deg / self.batch:.2f}s "
+            f"(assuming avg deg = {avg_deg})"
         ]
 
         now = time.time()
