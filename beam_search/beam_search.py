@@ -99,14 +99,14 @@ def main():
             sorted_idx = np.argsort(d_q)
             q_id = query_indices[i] if query_indices is not None else i
             tgt  = q_id if query_indices is not None else -1
-            true_top = sorted_idx[sorted_idx != q_id][:100]
+            true_top = sorted_idx[:100]
 
             for gi, g in enumerate(G):
                 result, expanded, seen = classicBeamSearch(
                     random_source, tgt, g, d_q, beam_width, K_search
                 )
                 # B is a max-heap of (-dist, node); sort ascending by dist
-                print(sorted(result, key=lambda x: -x[0]), true_top[0], tgt)
+                # print(sorted(result, key=lambda x: -x[0]), true_top[0], tgt)
                 returned = np.array([node for _, node in sorted(result, key=lambda x: -x[0])])
 
                 for k in RECALL_KS:
