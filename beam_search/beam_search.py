@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--adj_list", required=True, help="Adjacency list file")
     parser.add_argument("--dataset", required=True, help="Dataset file")
     parser.add_argument("--save_path", required=True, help="Place to save CSV")
-    parser.add_argument("--beam_width", type=int, default=1, help="Beam width")
+    parser.add_argument("--beam_widths", type=int, nargs='+', default=[1], help="One or more beam widths")
     parser.add_argument("--step_size", type=float, default=1, help="Coverage decrement step size")
     parser.add_argument("--min_coverage", type=float, default=90, help="Minimum coverage amount")
     parser.add_argument("--tests", type=int, default=100, help="Number of tests")
@@ -79,92 +79,94 @@ def main():
         print(f"{coverage[i] * 100:0.1f}% navigable: {g.number_of_edges() / n:0.2f}")
     print("--------------")
 
-    RECALL_KS  = [1, 10, 100]
-    K_search   = min(args.beam_width, 100)   # return up to 100 candidates
-    beam_width = args.beam_width
+    RECALL_KS     = [1, 10, 100]
+    beam_widths   = sorted(args.beam_widths)
+    K_search      = min(max(beam_widths), 100)   # return up to 100 candidates; same pass for all widths
     random_source = np.random.randint(0, X.shape[0])
 
     def run_search(query_vectors, query_indices=None):
         """
         query_vectors: (m, d) array of query points
         query_indices: if not None, indices into X (for train queries)
-        Returns a dict: k -> DataFrame with per-query stats for that recall level.
+        Returns a dict: (beam_width, k) -> DataFrame with per-query stats.
         """
-        # stats[k] holds per-query rows for recall@k
-        stats = {k: collections.defaultdict(list) for k in RECALL_KS}
+        stats = {(bw, k): collections.defaultdict(list) for bw in beam_widths for k in RECALL_KS}
 
         for i, qvec in enumerate(tqdm(query_vectors)):
-            d_q  = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
-            # ground truth top-100 (exclude self for train queries)
+            d_q      = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
             sorted_idx = np.argsort(d_q)
-            q_id = query_indices[i] if query_indices is not None else i
-            tgt  = q_id if query_indices is not None else -1
+            q_id     = query_indices[i] if query_indices is not None else i
+            tgt      = q_id if query_indices is not None else -1
             true_top = sorted_idx[:100]
 
             for gi, g in enumerate(G):
-                result, expanded, seen = classicBeamSearch(
-                    random_source, tgt, g, d_q, beam_width, K_search
-                )
-                # B is a max-heap of (-dist, node); sort ascending by dist
-                # print(sorted(result, key=lambda x: -x[0]), true_top[0], tgt)
-                returned = np.array([node for _, node in sorted(result, key=lambda x: -x[0])])
+                for bw in beam_widths:
+                    k_ret   = min(bw, 100)
+                    result, expanded, seen = classicBeamSearch(
+                        random_source, tgt, g, d_q, bw, k_ret
+                    )
+                    returned = np.array([node for _, node in sorted(result, key=lambda x: -x[0])])
 
+                    for k in RECALL_KS:
+                        stats[(bw, k)][f'relevant_{coverage[gi]}'].append(
+                            len(np.intersect1d(returned[:k], true_top[:k]))
+                        )
+                        stats[(bw, k)][f'seen_{coverage[gi]}'].append(seen)
+                        stats[(bw, k)][f'expanded_{coverage[gi]}'].append(expanded)
+
+            for bw in beam_widths:
                 for k in RECALL_KS:
-                    # recall = len(np.intersect1d(returned[:k], true_top[:k])) / k
-                    stats[k][f'relevant_{coverage[gi]}'].append(len(np.intersect1d(returned[:k], true_top[:k])))
-                    stats[k][f'seen_{coverage[gi]}'].append(seen)
-                    stats[k][f'expanded_{coverage[gi]}'].append(expanded)
+                    stats[(bw, k)]['q'].append(q_id)
+                    stats[(bw, k)]['beam_width'].append(bw)
+                    stats[(bw, k)]['k'].append(k)
 
-            for k in RECALL_KS:
-                stats[k]['q'].append(q_id)
-                stats[k]['beam_width'].append(beam_width)
-                stats[k]['k'].append(k)
-
-        return {k: pd.DataFrame(stats[k]) for k in RECALL_KS}
+        return {key: pd.DataFrame(s) for key, s in stats.items()}
 
     def print_summary(dfs, label):
-        for k in RECALL_KS:
-            df = dfs[k]
-            summary_dict = collections.defaultdict(list)
-            summary_dict['metric'] = ['avg recall', 'avg nodes seen', 'avg nodes expanded']
-            for gi in range(len(G)):
-                summary_dict[f'G_{coverage[gi]}'] = [
-                    df[f'relevant_{coverage[gi]}'].mean() / k,
-                    df[f'seen_{coverage[gi]}'].mean(),
-                    df[f'expanded_{coverage[gi]}'].mean(),
-                ]
-            summary = pd.DataFrame(summary_dict)
-            print(f"\n=== {label}  recall@{k} ===")
-            print(summary.to_string(index=False))
+        for bw in beam_widths:
+            for k in RECALL_KS:
+                df = dfs[(bw, k)]
+                summary_dict = collections.defaultdict(list)
+                summary_dict['metric'] = ['avg recall', 'avg nodes seen', 'avg nodes expanded']
+                for gi in range(len(G)):
+                    summary_dict[f'G_{coverage[gi]}'] = [
+                        df[f'relevant_{coverage[gi]}'].mean() / k,
+                        df[f'seen_{coverage[gi]}'].mean(),
+                        df[f'expanded_{coverage[gi]}'].mean(),
+                    ]
+                summary = pd.DataFrame(summary_dict)
+                print(f"\n=== {label}  beam_width={bw}  recall@{k} ===")
+                print(summary.to_string(index=False))
 
     # --- Train queries (sampled from X, ground truth computed on the fly) ---
     train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=args.tests, replace=False))
-    print(f"\nSearching train queries (n={args.tests})...")
+    print(f"\nSearching train queries (n={args.tests}, beam_widths={beam_widths})...")
     dfs_train = run_search(X[train_indices], query_indices=train_indices)
     print_summary(dfs_train, "Train queries")
 
     # --- Summary CSV: one row per (dataset, beam_width, k), append if exists ---
     summary_rows = []
-    for k in RECALL_KS:
-        df = dfs_train[k]
-        row = {
-            'dataset':    DATASET['name'],
-            'beam_width': beam_width,
-            'k':          k,
-        }
-        for gi, g in enumerate(G):
-            row[f'avg_edges_{coverage[gi]}']      = g.number_of_edges() / n
-            row[f'train_relevant_{coverage[gi]}']   = df[f'relevant_{coverage[gi]}'].mean()
-            row[f'train_seen_{coverage[gi]}']     = df[f'seen_{coverage[gi]}'].mean()
-            row[f'train_expanded_{coverage[gi]}'] = df[f'expanded_{coverage[gi]}'].mean()
-        summary_rows.append(row)
+    for bw in beam_widths:
+        for k in RECALL_KS:
+            df = dfs_train[(bw, k)]
+            row = {
+                'dataset':    DATASET['name'],
+                'beam_width': bw,
+                'k':          k,
+            }
+            for gi, g in enumerate(G):
+                row[f'avg_edges_{coverage[gi]}']        = g.number_of_edges() / n
+                row[f'train_relevant_{coverage[gi]}']   = df[f'relevant_{coverage[gi]}'].mean()
+                row[f'train_seen_{coverage[gi]}']       = df[f'seen_{coverage[gi]}'].mean()
+                row[f'train_expanded_{coverage[gi]}']   = df[f'expanded_{coverage[gi]}'].mean()
+            summary_rows.append(row)
 
-    summary_df  = pd.DataFrame(summary_rows)
+    summary_df   = pd.DataFrame(summary_rows)
     summary_path = f"{args.save_path}/beam_search_summary.csv"
 
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
-        mask = (existing['dataset'] == DATASET['name']) & (existing['beam_width'] == beam_width)
+        mask = (existing['dataset'] == DATASET['name']) & (existing['beam_width'].isin(beam_widths))
         if 'k' in existing.columns:
             mask = mask & existing['k'].isin(RECALL_KS)
         existing   = existing[~mask]
