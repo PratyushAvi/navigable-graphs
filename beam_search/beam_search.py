@@ -110,8 +110,8 @@ def main():
                 returned = np.array([node for _, node in sorted(result, key=lambda x: -x[0])])
 
                 for k in RECALL_KS:
-                    recall = len(np.intersect1d(returned[:k], true_top[:k])) / k
-                    stats[k][f'recall_{coverage[gi]}'].append(recall)
+                    # recall = len(np.intersect1d(returned[:k], true_top[:k])) / k
+                    stats[k][f'relevant_{coverage[gi]}'].append(len(np.intersect1d(returned[:k], true_top[:k])))
                     stats[k][f'seen_{coverage[gi]}'].append(seen)
                     stats[k][f'expanded_{coverage[gi]}'].append(expanded)
 
@@ -129,7 +129,7 @@ def main():
             summary_dict['metric'] = ['avg recall', 'avg nodes seen', 'avg nodes expanded']
             for gi in range(len(G)):
                 summary_dict[f'G_{coverage[gi]}'] = [
-                    df[f'recall_{coverage[gi]}'].mean(),
+                    df[f'relevant_{coverage[gi]}'].mean() / k,
                     df[f'seen_{coverage[gi]}'].mean(),
                     df[f'expanded_{coverage[gi]}'].mean(),
                 ]
@@ -154,7 +154,7 @@ def main():
         }
         for gi, g in enumerate(G):
             row[f'avg_edges_{coverage[gi]}']      = g.number_of_edges() / n
-            row[f'train_recall_{coverage[gi]}']   = df[f'recall_{coverage[gi]}'].mean()
+            row[f'train_relevant_{coverage[gi]}']   = df[f'relevant_{coverage[gi]}'].mean()
             row[f'train_seen_{coverage[gi]}']     = df[f'seen_{coverage[gi]}'].mean()
             row[f'train_expanded_{coverage[gi]}'] = df[f'expanded_{coverage[gi]}'].mean()
         summary_rows.append(row)
