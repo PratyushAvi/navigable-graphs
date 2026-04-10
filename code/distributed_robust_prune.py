@@ -131,9 +131,9 @@ class Coordinator:
                     self.uncov_current.pop(vec_id, None)
                     self.point_state.pop(vec_id, None)
 
-                    if (len(self.active) + len(self.computed)) < self.num_points:
+                    if len(self.computed) < self.num_points:
                         new_vec = int(np.random.choice(self.vector_ids))
-                        while new_vec in self.computed:
+                        while new_vec in self.computed or new_vec in self.active:
                             new_vec = int(np.random.choice(self.vector_ids))
                         self.active.add(new_vec)
                         message.append((new_vec, 'INIT', None))
