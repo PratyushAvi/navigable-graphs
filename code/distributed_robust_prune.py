@@ -329,10 +329,16 @@ class Worker:
             if is_sparse:
                 # ui is a sorted subset of union; searchsorted maps ui -> positions in D
                 d_col_at_ui = D[col][np.searchsorted(union, ui)]
+                keep = self.dists_matrix[row][ui] <= d_col_at_ui
+                ui   = ui[keep]
+            elif len(ui) == self.n:
+                # ui == arange(n): avoid expensive fancy indexing, compare directly
+                keep = self.dists_matrix[row] <= D[col]
+                ui   = np.where(keep)[0].astype(np.int32)
             else:
                 d_col_at_ui = D[col][ui]
-            keep = self.dists_matrix[row][ui] <= d_col_at_ui
-            ui   = ui[keep]
+                keep = self.dists_matrix[row][ui] <= d_col_at_ui
+                ui   = ui[keep]
             # Explicitly remove the waypoint itself — the pruning condition
             # dist(source, w) <= dist(w, w)=0 is True when they are duplicates
             # (dist=0), so the waypoint would otherwise never leave uncov.
