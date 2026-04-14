@@ -127,7 +127,7 @@ class Coordinator:
         print(f"Resuming from {len(self.computed)} already computed neighborhoods.", flush=True)
 
     def _computed_path(self):
-        return os.path.join(self.save_path, f"{self.name}-computed.txt")
+        return os.path.join(self.save_path, f"{self.name}-euclidean-computed.txt")
 
     def _adj_path(self):
         return os.path.join(self.save_path, f"adj-list-{self.name}-euclidean.txt")

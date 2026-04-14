@@ -50,7 +50,7 @@ def main():
     parser.add_argument("--beam_widths", type=int, nargs='+', default=[1], help="One or more beam widths")
     parser.add_argument("--step_size", type=float, default=1, help="Coverage decrement step size")
     parser.add_argument("--min_coverage", type=float, default=90, help="Minimum coverage amount")
-    parser.add_argument("--tests", type=int, default=100, help="Number of tests")
+    parser.add_argument("--tests", type=int, default=10000, help="Number of tests")
     args = parser.parse_args()
 
     splits = args.dataset.split("/")[-1].split("-")
