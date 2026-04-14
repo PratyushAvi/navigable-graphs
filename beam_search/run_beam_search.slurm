@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128GB
-#SBATCH --time=1:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output=slurm_out/slurm_%j.out
 
 SIF=/share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif
