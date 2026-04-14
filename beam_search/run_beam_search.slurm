@@ -6,7 +6,7 @@
 #SBATCH --mail-user=pa2439@nyu.edu
 #SBATCH --account=torch_pr_929_general
 #SBATCH --nodes=1
-#SBATCH --cpus=per-task=4
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=128GB
 #SBATCH --time=1:00:00
 #SBATCH --output=slurm_out/slurm_%j.out
