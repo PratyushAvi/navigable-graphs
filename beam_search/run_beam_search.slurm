@@ -16,11 +16,12 @@ OVERLAY=$SCRATCH/envs/overlay-15GB-500K.ext3
 SING="singularity exec --fakeroot --overlay ${OVERLAY}:ro ${SIF}"
 
 $SING /bin/bash -c "
-    source /ext3/env.sh && conda activate big_ann &&\
-    python beam_search.py --adj_list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-glove25-euclidean.txt \\
-        --dataset /scratch/pa2439/ANN-Search/datasets/glove25-25-angular.hdf5 \\
-        --save_path /scratch/pa2439/ANN-Search/navigable_graph_results/
-        --step_size 0.5
-        --min_coverage 80
+    source /ext3/env.sh && conda activate big_ann && \
+    python /scratch/pa2439/ANN-Search/navigable_graph_results/beam_search/beam_search.py \
+        --adj_list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-glove25-euclidean.txt \
+        --dataset /scratch/pa2439/ANN-Search/datasets/glove25-25-angular.hdf5 \
+        --save_path /scratch/pa2439/ANN-Search/navigable_graph_results/ \
+        --step_size 0.5 \
+        --min_coverage 80 \
         --beam_widths 1 2 4 8 16 32 64 100 128 256
 "
