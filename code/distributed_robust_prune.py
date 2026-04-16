@@ -94,12 +94,19 @@ class Coordinator:
 
         print(f"Resuming from {len(self.computed)} already computed neighborhoods.", flush=True)
 
+        need       = self.num_points - len(self.computed)
+        n_sample   = min(need * 10, len(self.vector_ids))
+        candidates = np.random.choice(self.vector_ids, n_sample, replace=False)
+        filtered   = [int(v) for v in candidates if v not in self.computed]
+        self.queue = collections.deque(filtered[:need])
+        print(f"Queue built with {len(self.queue)} uncomputed vectors.", flush=True)
+
     def ready(self):
         return True
 
     def computeNeighborhoods(self):
         print("[Coordinator] computeNeighborhoods start", flush=True)
-        self.active = set(int(v) for v in np.random.choice(self.vector_ids, self.batch, replace=False))
+        self.active = set(self.queue.popleft() for _ in range(self.batch))
         print(f"[Coordinator] initial batch sampled: {self.active}", flush=True)
         message           = []
         compute_distances = []
@@ -131,10 +138,8 @@ class Coordinator:
                     self.uncov_current.pop(vec_id, None)
                     self.point_state.pop(vec_id, None)
 
-                    if len(self.computed) < self.num_points:
-                        new_vec = int(np.random.choice(self.vector_ids))
-                        while new_vec in self.computed or new_vec in self.active:
-                            new_vec = int(np.random.choice(self.vector_ids))
+                    if self.queue:
+                        new_vec = self.queue.popleft()
                         self.active.add(new_vec)
                         message.append((new_vec, 'INIT', None))
                         compute_distances.append(new_vec)
