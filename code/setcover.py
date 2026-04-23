@@ -85,6 +85,8 @@ def main():
     cp.get_default_memory_pool().free_all_blocks()
 
     for source in tqdm(range(len(dataset_cp))):
+        if source in completed:
+            continue
         edges = greedySetCover(permutation_matrix, source)
         with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
             adj.write(f"{source} {edges}\n")
