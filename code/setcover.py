@@ -28,7 +28,7 @@ def main():
     DATASET = args.dataset # Get dataset name from argument
     use_cpu = True
 
-    print("Building graph on", DATASET)
+    print("Building graph on", DATASET, flush=True)
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
 
     DATASETS = dict()
@@ -62,7 +62,10 @@ def main():
 
     # Precompute augmented dataset matrix once; amortised across all batches.
 
-    dist_matrix = cdist(dataset, metric='sqeuclidean')
+    print("Computing pairwise distances...", flush=True)
+    dist_matrix = cdist(dataset, dataset, metric='sqeuclidean')
+
+    print("Building permutation matrix...", flush=True)
     permutation_matrix = cp.asarray(rankdata(dist_matrix, method='ordinal', axis=1), dtype=cp.uint16)
 
     for source in tqdm(range(len(dataset))):
