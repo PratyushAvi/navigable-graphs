@@ -68,7 +68,21 @@ def main():
     cp.maximum(dist_matrix, 0.0, out=dist_matrix)
 
     print("Building permutation matrix...", flush=True)
-    permutation_matrix = cp.argsort(cp.argsort(dist_matrix, axis=1), axis=1).astype(cp.uint16)
+    n = dataset_cp.shape[0]
+    permutation_matrix = cp.empty((n, n), dtype=cp.uint16)
+    batch_size = args.batch_size
+    row_idx = cp.arange(n, dtype=cp.uint16)
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        batch_n = end - start
+        batch = dist_matrix[start:end]          # view, no copy
+        order = cp.argsort(batch, axis=1)       # int64 (unavoidable)
+        ranks = cp.empty((batch_n, n), dtype=cp.uint16)
+        ranks[cp.arange(batch_n)[:, None], order] = row_idx[None, :]
+        permutation_matrix[start:end] = ranks
+        del order, ranks
+    del dist_matrix
+    cp.get_default_memory_pool().free_all_blocks()
 
     for source in tqdm(range(len(dataset_cp))):
         # Build sets for this source on GPU
