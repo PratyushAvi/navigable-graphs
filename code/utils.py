@@ -79,12 +79,13 @@ def greedySetCover(sets, permutation_matrix, source):
         
         # Find argmax on GPU
         index = int(cp.argmax(scores))
-        edges.append(index)
         
         # Update covered set
         newly_covered = sets_bool[:, index] & (~covered)
         uncovered -= int(cp.sum(newly_covered))
         covered |= newly_covered
+
+        edges.append((index, uncovered))
     
     return edges
 
