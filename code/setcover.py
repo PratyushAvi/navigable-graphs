@@ -5,6 +5,7 @@ import argparse
 import h5py
 from tqdm import tqdm
 import pandas as pd
+from cupyx.scipy.spatial.distance import cdist
 
 
 def main():
@@ -50,7 +51,7 @@ def main():
 
     data = h5py.File(DATASETS[DATASET]['filepath'], 'r')['train']
     
-    dataset = np.asarray(data)
+    dataset = cp.asarray(data)
 
     # all_sources = np.arange(dataset.shape[0])
     # np.random.shuffle(all_sources)
