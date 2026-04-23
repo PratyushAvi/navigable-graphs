@@ -54,9 +54,9 @@ def greedySetCover(permutation_matrix, source):
     """
     GPU-accelerated greedy set cover.
 
-    Avoids materialising the n×n sets matrix; instead slices only uncovered
-    rows of permutation_matrix each iteration, keeping peak VRAM at
-    ~2× the permutation_matrix footprint rather than ~4×.
+    Precomputes sets as bool (4.9 GB for n=70k) once per source, then uses
+    a matmul for scoring each iteration.  Peak VRAM during the matmul:
+      perm (9.8 GB) + sets_bool (4.9 GB) + int32 matmul temp (14.4 GB) = 29.1 GB.
 
     Args:
         permutation_matrix: CuPy array (n, n) uint16 on GPU
@@ -70,18 +70,17 @@ def greedySetCover(permutation_matrix, source):
     covered[source] = True
     edges = []
     uncovered = n - 1
-    threshold = permutation_matrix[:, source]   # (n,) rank of source from each point's view
+
+    # Compute sets as bool once — fixed for this source
+    threshold = permutation_matrix[:, source]
+    sets = permutation_matrix < threshold[:, None]   # (n, n) bool, 4.9 GB
 
     while uncovered > 0:
-        uncov_mask = ~covered
-        # below[i, v] = True iff uncovered point i has v ranked closer than source
-        below = permutation_matrix[uncov_mask] < threshold[uncov_mask, None]  # (num_uncov, n) bool
-        scores = cp.sum(below, axis=0, dtype=cp.int32)   # (n,) — no int32 cast of full matrix
-        del below
+        scores = (~covered).astype(cp.int32) @ sets   # fast BLAS matmul
 
         index = int(cp.argmax(scores))
 
-        newly_covered = (permutation_matrix[:, index] < threshold) & uncov_mask
+        newly_covered = sets[:, index] & (~covered)
         uncovered -= int(cp.sum(newly_covered))
         covered |= newly_covered
         edges.append((index, uncovered))
