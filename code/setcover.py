@@ -50,8 +50,6 @@ def main():
         completed = set([int(line.strip()) for line in f if line.strip()])
 
     data = h5py.File(DATASETS[DATASET]['filepath'], 'r')['train']
-    
-    dataset = cp.asarray(data)
 
     # all_sources = np.arange(dataset.shape[0])
     # np.random.shuffle(all_sources)
@@ -64,12 +62,15 @@ def main():
     # Precompute augmented dataset matrix once; amortised across all batches.
 
     print("Computing pairwise distances...", flush=True)
-    dist_matrix = cdist(dataset, dataset, metric='sqeuclidean')
+    dataset_cp = cp.asarray(data, dtype=cp.float32)
+    sq_norms = cp.einsum('ij,ij->i', dataset_cp, dataset_cp)
+    dist_matrix = sq_norms[:, None] + sq_norms[None, :] - 2.0 * (dataset_cp @ dataset_cp.T)
+    cp.maximum(dist_matrix, 0.0, out=dist_matrix)
 
     print("Building permutation matrix...", flush=True)
-    permutation_matrix = cp.asarray(rankdata(dist_matrix, method='ordinal', axis=1), dtype=cp.uint16)
+    permutation_matrix = cp.argsort(cp.argsort(dist_matrix, axis=1), axis=1).astype(cp.uint16)
 
-    for source in tqdm(range(len(dataset))):
+    for source in tqdm(range(len(dataset_cp))):
         # Build sets for this source on GPU
         # print(f"{source} building sets", end='\r')
         sets = buildSetsOfSource(permutation_matrix, source)
