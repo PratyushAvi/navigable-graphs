@@ -85,12 +85,7 @@ def main():
     cp.get_default_memory_pool().free_all_blocks()
 
     for source in tqdm(range(len(dataset_cp))):
-        # Build sets for this source on GPU
-        # print(f"{source} building sets", end='\r')
-        sets = buildSetsOfSource(permutation_matrix, source)
-        # print(f"{source} done building", end='\r')
-        # Run greedy set cover on GPU
-        edges = greedySetCover(sets, permutation_matrix, source)
+        edges = greedySetCover(permutation_matrix, source)
         with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
             adj.write(f"{source} {edges}\n")
             comp.write(f"{source}\n")

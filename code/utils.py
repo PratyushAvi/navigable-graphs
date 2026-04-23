@@ -50,43 +50,42 @@ def buildSetsOfSource(permutation_matrix, source):
     
     return setsFromSourceVia
 
-def greedySetCover(sets, permutation_matrix, source):
+def greedySetCover(permutation_matrix, source):
     """
     GPU-accelerated greedy set cover.
-    
+
+    Avoids materialising the n×n sets matrix; instead slices only uncovered
+    rows of permutation_matrix each iteration, keeping peak VRAM at
+    ~2× the permutation_matrix footprint rather than ~4×.
+
     Args:
-        sets: CuPy array (n, n) on GPU
-        permutation_matrix: CuPy array (n, n) on GPU
+        permutation_matrix: CuPy array (n, n) uint16 on GPU
         source: int, source vertex index
-    
+
     Returns:
-        list of edge indices (transferred to CPU)
+        list of (neighbor_id, uncov_count) tuples (transferred to CPU)
     """
     n = permutation_matrix.shape[0]
-    
-    # Initialize on GPU
     covered = cp.zeros(n, dtype=cp.bool_)
     covered[source] = True
     edges = []
-    
     uncovered = n - 1
-    sets_bool = sets.astype(cp.bool_)
-    
-    # while not cp.all(covered):            
+    threshold = permutation_matrix[:, source]   # (n,) rank of source from each point's view
+
     while uncovered > 0:
-        # Compute scores on GPU (matrix-vector multiplication)
-        scores = (~covered).astype(cp.int32) @ sets
-        
-        # Find argmax on GPU
+        uncov_mask = ~covered
+        # below[i, v] = True iff uncovered point i has v ranked closer than source
+        below = permutation_matrix[uncov_mask] < threshold[uncov_mask, None]  # (num_uncov, n) bool
+        scores = cp.sum(below, axis=0, dtype=cp.int32)   # (n,) — no int32 cast of full matrix
+        del below
+
         index = int(cp.argmax(scores))
-        
-        # Update covered set
-        newly_covered = sets_bool[:, index] & (~covered)
+
+        newly_covered = (permutation_matrix[:, index] < threshold) & uncov_mask
         uncovered -= int(cp.sum(newly_covered))
         covered |= newly_covered
-
         edges.append((index, uncovered))
-    
+
     return edges
 
 def buildSetCoverGraph(permutation_matrix):
@@ -105,14 +104,9 @@ def buildSetCoverGraph(permutation_matrix):
     print("Building graph on GPU")
 
     for source in tqdm(range(n)):
-        # Build sets for this source on GPU
-        # print(f"{source} building sets", end='\r')
-        sets = buildSetsOfSource(permutation_matrix, source)
-        # print(f"{source} done building", end='\r')
-        # Run greedy set cover on GPU
-        edges = greedySetCover(sets, permutation_matrix, source)
+        edges = greedySetCover(permutation_matrix, source)
         edgeSet.append(edges)
-    
+
     return edgeSet
 
 #######################
