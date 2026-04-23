@@ -71,16 +71,19 @@ def greedySetCover(permutation_matrix, source):
     edges = []
     uncovered = n - 1
 
-    # Compute sets as bool once — fixed for this source
+    # Precompute sets as float32 once — fixed for this source.
+    # Casting once before the loop avoids a 14.4 GB dynamic allocation inside
+    # each matmul iteration (which corrupts GPU state via cuBLAS int32 path).
+    # float32 represents integers exactly up to 2^24 >> n, so no precision loss.
     threshold = permutation_matrix[:, source]
-    sets = permutation_matrix < threshold[:, None]   # (n, n) bool, 4.9 GB
+    sets_f32 = (permutation_matrix < threshold[:, None]).astype(cp.float32)  # (n, n) float32, 14.4 GB
 
     while uncovered > 0:
-        scores = (~covered).astype(cp.int32) @ sets   # fast BLAS matmul
+        scores = (~covered).astype(cp.float32) @ sets_f32   # standard cublasSgemm
 
         index = int(cp.argmax(scores))
 
-        newly_covered = sets[:, index] & (~covered)
+        newly_covered = (sets_f32[:, index] != 0) & (~covered)
         uncovered -= int(cp.sum(newly_covered))
         covered |= newly_covered
         edges.append((index, uncovered))
