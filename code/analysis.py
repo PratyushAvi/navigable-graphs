@@ -20,37 +20,57 @@ def main():
     for d in dataset_records:
         DATASETS[d['name']] = d
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
-    adjLists = glob.glob(f"{SAVEPATH}/adj*")
-    
+
+    # Collect both robust-prune and set-cover adjacency files with their method labels
+    adjLists = (
+        [(f, 'robust-prune') for f in glob.glob(f"{SAVEPATH}/adj-list-*.txt")] +
+        [(f, 'set-cover')    for f in glob.glob(f"{SAVEPATH}/set-cover-adj-list-*.txt")]
+    )
+
+    def parse_filename(file, method):
+        """Extract (dataset_name, metric) from an adj-list filename."""
+        stem = os.path.basename(file).replace(".txt", "")
+        if method == 'set-cover':
+            # set-cover-adj-list-{DATASET}-{metric}
+            parts = stem.split("-")[4:]   # drop "set-cover-adj-list"
+        else:
+            # adj-list-{DATASET}-{metric}
+            parts = stem.split("-")[2:]   # drop "adj-list"
+        metric = parts[-1]
+        dataset_name = "-".join(parts[:-1])
+        return dataset_name, metric
+
     # Load existing stats if available
     stats_file = "/scratch/pa2439/ANN-Search/navigable_graph_results/99p_stats.csv"
     if os.path.exists(stats_file):
         existing_stats = pd.read_csv(stats_file)
+        # Back-fill method column if loading a CSV that predates this field
+        if 'method' not in existing_stats.columns:
+            existing_stats['method'] = 'robust-prune'
         stats_dict = {}
         for _, row in existing_stats.iterrows():
-            key = (row['dataset'], row['metric'])
+            key = (row['dataset'], row['metric'], row['method'])
             stats_dict[key] = (row['points computed'], row['total points'])
     else:
+        existing_stats = pd.DataFrame()
         stats_dict = {}
-    
+
     # Filter files that need processing
     files_to_process = []
-    for file in adjLists:
-        splits = file.replace(".txt", "").split("-")
-        dataset_name = splits[3]
-        metric = splits[4]
-        
+    for file, method in adjLists:
+        dataset_name, metric = parse_filename(file, method)
+
         if args.dataset is not None and dataset_name != args.dataset:
             continue
-        
-        key = (dataset_name, metric)
-        
+
+        key = (dataset_name, metric, method)
+
         if key not in stats_dict:
-            files_to_process.append(file)
+            files_to_process.append((file, method))
         else:
             computed, total = stats_dict[key]
             if computed < total:
-                files_to_process.append(file)
+                files_to_process.append((file, method))
     
     if args.dataset:
         print(f"Processing dataset: {args.dataset}")
@@ -61,21 +81,19 @@ def main():
         return
     
     stats = []
-    
-    for file in tqdm(files_to_process, desc="Processing adjacency lists"):
-        splits = file.replace(".txt", "").split("-")
-        dataset_name = splits[3]
-        metric = splits[4]
+
+    for file, method in tqdm(files_to_process, desc="Processing adjacency lists"):
+        dataset_name, metric = parse_filename(file, method)
         
         n_nodes = DATASETS[dataset_name]['train']
-        print(f"\nProcessing {dataset_name}-{metric} with {n_nodes} nodes")
-        
+        print(f"\nProcessing {dataset_name}-{metric} [{method}] with {n_nodes} nodes")
+
         # Use memory-mapped files for very large datasets
         degrees_path = '/scratch/pa2439/Projects/ANN-Search/navigable_graph_results/degrees'
         os.makedirs(degrees_path, exist_ok=True)
-        
-        outDeg_file = f'{degrees_path}/{dataset_name}-{metric}-out-degrees.npy'
-        inDeg_file = f'{degrees_path}/{dataset_name}-{metric}-in-degrees.npy'
+
+        outDeg_file = f'{degrees_path}/{dataset_name}-{metric}-{method}-out-degrees.npy'
+        inDeg_file = f'{degrees_path}/{dataset_name}-{metric}-{method}-in-degrees.npy'
         
         # Create memory-mapped arrays
         outDeg = np.memmap(outDeg_file, dtype='uint32', mode='w+', shape=(n_nodes,))
@@ -166,6 +184,7 @@ def main():
         stats.append([
             dataset_name,
             metric,
+            method,
             DATASETS[dataset_name]['dimensions'],
             counter,
             n_nodes,
@@ -179,7 +198,7 @@ def main():
             avg_edges_to_99pct,
         ])
         
-        print(f"✓ Completed {dataset_name}-{metric}: {counter} points, avg out-degree: {np.round(np.mean(outDegNNZ), 2)}")
+        print(f"✓ Completed {dataset_name}-{metric} [{method}]: {counter} points, avg out-degree: {np.round(np.mean(outDegNNZ), 2)}")
         print(f"  Saved degrees to: {outDeg_file} and {inDeg_file}")
         
         # Clean up
@@ -187,14 +206,15 @@ def main():
         gc.collect()
     
     # Merge new stats with existing stats
-    new_stats_df = pd.DataFrame(stats, columns=['dataset', 'metric', 'dimensions', 'points computed', 'total points',
+    new_stats_df = pd.DataFrame(stats, columns=['dataset', 'metric', 'method', 'dimensions', 'points computed', 'total points',
                                                   'mean out degree', 'median out degree', 'median in degree',
                                                   'min out degree', 'max out degree', 'min in degree', 'max in degree',
                                                   'avg edges to 99pct coverage'])
-    
-    if os.path.exists(stats_file):
-        processed_keys = set((row[0], row[1]) for row in stats)
-        existing_stats = existing_stats[~existing_stats.apply(lambda row: (row['dataset'], row['metric']) in processed_keys, axis=1)]
+
+    if not existing_stats.empty:
+        processed_keys = set((row[0], row[1], row[2]) for row in stats)
+        existing_stats = existing_stats[~existing_stats.apply(
+            lambda row: (row['dataset'], row['metric'], row['method']) in processed_keys, axis=1)]
         combined_stats = pd.concat([existing_stats, new_stats_df], ignore_index=True)
     else:
         combined_stats = new_stats_df
