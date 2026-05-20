@@ -139,16 +139,22 @@ def main():
                 print(summary.to_string(index=False))
 
     # --- Train queries (sampled from X, ground truth computed on the fly) ---
-    train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=args.tests, replace=False))
+    # train_indices = np.sort(np.random.choice(np.arange(X.shape[0]), size=args.tests, replace=False))
+    # print(f"\nSearching train queries (n={args.tests}, beam_widths={beam_widths})...")
+    # dfs_train = run_search(X[train_indices], query_indices=train_indices)
+    # print_summary(dfs_train, "Train queries")
+
+    # --- Test queries (sampled from Y, ground truth computed on the fly) ---
+    test_indices = np.sort(np.random.choice(np.arange(Y.shape[0]), size=args.tests, replace=False))
     print(f"\nSearching train queries (n={args.tests}, beam_widths={beam_widths})...")
-    dfs_train = run_search(X[train_indices], query_indices=train_indices)
-    print_summary(dfs_train, "Train queries")
+    dfs_test = run_search(Y[test_indices], query_indices=test_indices)
+    print_summary(dfs_test, "Test queries")
 
     # --- Summary CSV: one row per (dataset, beam_width, k), append if exists ---
     summary_rows = []
     for bw in beam_widths:
         for k in RECALL_KS:
-            df = dfs_train[(bw, k)]
+            df = dfs_test[(bw, k)]
             row = {
                 'dataset':    DATASET['name'],
                 'beam_width': bw,
@@ -162,7 +168,7 @@ def main():
             summary_rows.append(row)
 
     summary_df   = pd.DataFrame(summary_rows)
-    summary_path = f"{args.save_path}/beam_search_summary.csv"
+    summary_path = f"{args.save_path}/beam_search_summary_test.csv"
 
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
