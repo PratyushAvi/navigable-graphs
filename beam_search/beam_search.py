@@ -146,7 +146,7 @@ def main():
 
     # --- Test queries (sampled from Y, ground truth computed on the fly) ---
     test_indices = np.sort(np.random.choice(np.arange(Y.shape[0]), size=args.tests, replace=False))
-    print(f"\nSearching train queries (n={args.tests}, beam_widths={beam_widths})...")
+    print(f"\nSearching test queries (n={args.tests}, beam_widths={beam_widths})...")
     dfs_test = run_search(Y[test_indices], query_indices=test_indices)
     print_summary(dfs_test, "Test queries")
 
