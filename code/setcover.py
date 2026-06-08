@@ -1,16 +1,52 @@
 import numpy as np
-import cupy as cp
 from utils import *
 import argparse
 import h5py
 from tqdm import tqdm
 import pandas as pd
-from cupyx.scipy.spatial.distance import cdist
+
+
+def greedySetCover(permutation_matrix, source):
+    """
+    CPU (NumPy) greedy set cover.
+
+    permutation_matrix[i, j] is the rank of point j in point i's distance-sorted
+    order (0 = closest). A point i is "covered via" candidate j when j is closer to
+    i than the source is, i.e. permutation_matrix[i, j] < permutation_matrix[i, source].
+
+    Args:
+        permutation_matrix: NumPy array (n, n) uint16
+        source: int, source vertex index
+
+    Returns:
+        list of (neighbor_id, uncov_count) tuples
+    """
+    n = permutation_matrix.shape[0]
+    covered = np.zeros(n, dtype=np.bool_)
+    covered[source] = True
+    edges = []
+    uncovered = n - 1
+
+    # sets[i, j] = 1 if candidate j covers point i (j closer to i than source is).
+    # float32 so scoring is a single BLAS matmul; integers up to 2^24 are exact.
+    threshold = permutation_matrix[:, source]
+    sets_f32 = (permutation_matrix < threshold[:, None]).astype(np.float32)
+
+    while uncovered > 0:
+        scores = (~covered).astype(np.float32) @ sets_f32
+
+        index = int(np.argmax(scores))
+
+        newly_covered = (sets_f32[:, index] != 0) & (~covered)
+        uncovered -= int(np.sum(newly_covered))
+        covered |= newly_covered
+        edges.append((index, uncovered))
+
+    return edges
 
 
 def main():
-    # 1. Setup ArgParse (MINIMAL CHANGE)
-    parser = argparse.ArgumentParser(description="Compute edges for a Navigable Graph dataset.")
+    parser = argparse.ArgumentParser(description="Compute set-cover edges for a Navigable Graph dataset (CPU).")
     parser.add_argument(
         '--dataset',
         type=str,
@@ -20,20 +56,17 @@ def main():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=50,
-        help='Sources processed in parallel per batch. '
-             'GPU: tune to fit VRAM (~5 * batch_size * n * 4 bytes). '
-             'CPU: tune to fit RAM (same formula but RAM is usually larger).'
+        default=2000,
+        help='Rows ranked per batch when building the permutation matrix. '
+             'Tune to fit RAM (~batch_size * n * 8 bytes for the temporary distance block).'
     )
     args = parser.parse_args()
-    DATASET = args.dataset # Get dataset name from argument
-    use_cpu = True
+    DATASET = args.dataset
 
-    print("Building graph on", DATASET, flush=True)
+    print("Building graph on", DATASET, "(CPU)", flush=True)
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
 
     DATASETS = dict()
-    # Note: pd.read_csv returns a DataFrame; converting to a list of dicts first, then processing.
     dataset_records = pd.read_csv("/scratch/pa2439/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
     for d in dataset_records:
         DATASETS[d['name']] = d
@@ -41,58 +74,52 @@ def main():
     if DATASET not in DATASETS:
         print(f"Error: Dataset '{DATASET}' not found in the loaded metadata.")
         return
-    
+
     metric = 'euclidean'
 
-    # assume no other program is trying to edges simultaneously
+    # assume no other program is trying to compute edges simultaneously
     with open(f"{SAVEPATH}/{DATASET}-set-cover-{metric}-computed.txt", 'a+') as f:
         f.seek(0)
         completed = set([int(line.strip()) for line in f if line.strip()])
 
     data = h5py.File(DATASETS[DATASET]['filepath'], 'r')['train']
 
-    # all_sources = np.arange(dataset.shape[0])
-    # np.random.shuffle(all_sources)
-
-    # sources_to_process = [source for source in all_sources if source not in completed]
-
     adj_path      = f"{SAVEPATH}/set-cover-adj-list-{DATASET}-{metric}.txt"
     computed_path = f"{SAVEPATH}/{DATASET}-set-cover-{metric}-computed.txt"
 
-    # Precompute augmented dataset matrix once; amortised across all batches.
+    print("Loading dataset...", flush=True)
+    dataset = np.asarray(data, dtype=np.float32)
+    n = dataset.shape[0]
+    sq_norms = np.einsum('ij,ij->i', dataset, dataset)
 
-    print("Computing pairwise distances...", flush=True)
-    dataset_cp = cp.asarray(data, dtype=cp.float32)
-    sq_norms = cp.einsum('ij,ij->i', dataset_cp, dataset_cp)
-    dist_matrix = sq_norms[:, None] + sq_norms[None, :] - 2.0 * (dataset_cp @ dataset_cp.T)
-    cp.maximum(dist_matrix, 0.0, out=dist_matrix)
-
-    print("Building permutation matrix...", flush=True)
-    n = dataset_cp.shape[0]
-    permutation_matrix = cp.empty((n, n), dtype=cp.uint16)
+    print(f"Building permutation matrix ({n} x {n} uint16, "
+          f"{n * n * 2 / 1e9:.1f} GB)...", flush=True)
+    permutation_matrix = np.empty((n, n), dtype=np.uint16)
     batch_size = args.batch_size
-    row_idx = cp.arange(n, dtype=cp.uint16)
-    for start in range(0, n, batch_size):
+    row_idx = np.arange(n, dtype=np.uint16)
+    for start in tqdm(range(0, n, batch_size), desc="ranking"):
         end = min(start + batch_size, n)
         batch_n = end - start
-        batch = dist_matrix[start:end]          # view, no copy
-        order = cp.argsort(batch, axis=1)       # int64 (unavoidable)
-        ranks = cp.empty((batch_n, n), dtype=cp.uint16)
-        ranks[cp.arange(batch_n)[:, None], order] = row_idx[None, :]
+        # squared euclidean distances for this row block, never the full matrix
+        dist_block = (sq_norms[start:end, None] + sq_norms[None, :]
+                      - 2.0 * (dataset[start:end] @ dataset.T))
+        np.maximum(dist_block, 0.0, out=dist_block)
+        order = np.argsort(dist_block, axis=1)            # nearest -> farthest
+        ranks = np.empty((batch_n, n), dtype=np.uint16)
+        ranks[np.arange(batch_n)[:, None], order] = row_idx[None, :]
         permutation_matrix[start:end] = ranks
-        del order, ranks
-    del dist_matrix
-    cp.get_default_memory_pool().free_all_blocks()
+        del dist_block, order, ranks
 
-    for source in tqdm(range(len(dataset_cp))):
+    for source in tqdm(range(n), desc="set cover"):
         if source in completed:
             continue
         edges = greedySetCover(permutation_matrix, source)
         with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
             adj.write(f"{source} {edges}\n")
             comp.write(f"{source}\n")
-        
+
     print(f"Done with {DATASET}")
+
 
 if __name__ == "__main__":
     main()
