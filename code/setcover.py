@@ -26,7 +26,7 @@ def greedySetCover(permutation_matrix, source, inner_bar=False):
         source: int, source vertex index
         inner_bar: if True (interactive terminal only), show a per-source tqdm bar
                    tracking points covered. Disabled by default so it does not spam
-                   a redirected log (SLURM / `tail -f`).
+                   a redirected log (SLURM / `tail -f`).    
 
     Returns:
         list of (neighbor_id, uncov_count) tuples

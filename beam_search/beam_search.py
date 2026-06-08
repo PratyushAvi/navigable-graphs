@@ -168,7 +168,7 @@ def main():
             summary_rows.append(row)
 
     summary_df   = pd.DataFrame(summary_rows)
-    summary_path = f"{args.save_path}/beam_search_summary_test.csv"
+    summary_path = f"{args.save_path}/beam_search_summary_test_sc.csv"
 
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
