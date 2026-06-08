@@ -36,31 +36,36 @@ def greedySetCover(permutation_matrix, source, inner_bar=False):
     # permutation_matrix[i, j] < threshold[i]  (j is closer to i than the source).
     threshold = permutation_matrix[:, source].astype(np.uint16)
 
-    # Work only over the still-uncovered points. The source covers itself.
-    # We keep an array of uncovered row indices and shrink it each iteration,
-    # so the score reduction gets cheaper as coverage grows — and we never
-    # materialise the n x n "sets" matrix.
-    uncovered_rows = np.delete(np.arange(n, dtype=np.intp), source)
+    # Build the boolean "sets" matrix ONCE for this source:
+    #   covers[i, j] = True  iff candidate j covers point i.
+    # n x n bool = ~12.8 GB at n=113k. We then reduce over only the still-uncovered
+    # rows each iteration using a boolean mask — no per-iteration gather/copy, so
+    # peak memory is resident perm matrix (25.7 GB) + this bool matrix (12.8 GB).
+    covers = permutation_matrix < threshold[:, None]             # (n, n) bool, built once
+
+    uncovered = np.ones(n, dtype=np.bool_)
+    uncovered[source] = False                                    # source covers itself
+    n_uncovered = n - 1
     edges = []
 
-    bar = (tqdm(total=uncovered_rows.size, desc=f"  cover src {source}",
+    bar = (tqdm(total=n_uncovered, desc=f"  cover src {source}",
                 unit="pt", leave=False, position=1) if inner_bar else None)
 
-    while uncovered_rows.size > 0:
-        # rows of the permutation matrix for the points still uncovered
-        sub = permutation_matrix[uncovered_rows]                 # (u, n) uint16, view-copy
-        covers = sub < threshold[uncovered_rows, None]           # (u, n) bool
-        scores = covers.sum(axis=0)                              # (n,) int per candidate
+    while n_uncovered > 0:
+        # score candidates by how many still-uncovered points they cover.
+        # restrict the reduction to uncovered rows (no copy of the matrix).
+        scores = covers[uncovered].sum(axis=0)                   # (n,) int per candidate
         index = int(np.argmax(scores))
 
-        # which currently-uncovered rows does this candidate cover?
-        newly = covers[:, index]
-        uncovered_rows = uncovered_rows[~newly]
-        edges.append((index, int(uncovered_rows.size)))
+        newly = covers[:, index] & uncovered                    # uncovered rows j covers
+        newly_count = int(newly.sum())
+        uncovered &= ~newly
+        n_uncovered -= newly_count
+        edges.append((index, n_uncovered))
 
         if bar is not None:
-            bar.update(int(newly.sum()))
-            bar.set_postfix(edges=len(edges), uncov=uncovered_rows.size, refresh=False)
+            bar.update(newly_count)
+            bar.set_postfix(edges=len(edges), uncov=n_uncovered, refresh=False)
 
     if bar is not None:
         bar.close()
@@ -142,13 +147,18 @@ def main():
           f"({len(completed)} already done).", flush=True)
 
     # Interactive terminal: animated tqdm bar. Redirected log (SLURM / tail -f):
-    # plain newline-terminated lines on an interval so the log stays readable.
-    log_every = max(1, len(remaining) // 200)   # ~200 progress lines total for a file
+    # plain newline-terminated lines so the log stays readable.
+    # Log EVERY source for the first few (so you can see it is alive and how slow
+    # one source is), then thin out to ~200 lines total for the whole run.
+    n_rem = len(remaining)
+    log_every = max(1, n_rem // 200)
     t_start = time.time()
     outer = tqdm(remaining, desc="set cover", unit="src", disable=not IS_TTY)
 
     for source in outer:
+        t_src = time.time()
         edges = greedySetCover(permutation_matrix, source, inner_bar=IS_TTY)
+        src_secs = time.time() - t_src
         total_edges += len(edges)
         processed += 1
         with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
@@ -159,14 +169,16 @@ def main():
             outer.set_postfix(deg=len(edges),
                               avg_deg=f"{total_edges / processed:.1f}",
                               total_edges=total_edges, refresh=False)
-        elif processed % log_every == 0 or processed == len(remaining):
+            continue
+
+        # log file: chatty at the start, then periodic
+        if processed <= 5 or processed % log_every == 0 or processed == n_rem:
             elapsed = time.time() - t_start
             rate = processed / elapsed
-            eta = (len(remaining) - processed) / rate if rate > 0 else 0.0
-            print(f"[set cover] {processed}/{len(remaining)} sources "
-                  f"| last src={source} deg={len(edges)} "
-                  f"| avg_deg={total_edges / processed:.1f} "
-                  f"| {rate:.2f} src/s | ETA {eta / 3600:.1f}h",
+            eta = (n_rem - processed) / rate if rate > 0 else 0.0
+            print(f"[set cover] {processed}/{n_rem} | src={source} deg={len(edges)} "
+                  f"| {src_secs:.1f}s/src | avg_deg={total_edges / processed:.1f} "
+                  f"| {rate:.3f} src/s | ETA {eta / 3600:.1f}h",
                   flush=True)
 
     print(f"Done with {DATASET}: {processed} sources, {total_edges} edges total.", flush=True)
