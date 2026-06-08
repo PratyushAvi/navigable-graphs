@@ -201,10 +201,21 @@ def load_graphs(adj_list_path, n, coverages):
             source       = int(line[:space])
             neighborhood = ast.literal_eval(line[space + 1:])   # [(neighbor, uncov), ...]
 
+            # `uncov` is the count of points STILL uncovered AFTER adding this edge.
+            # Greedy order => uncov is non-increasing along the list. To reach
+            # coverage c we must keep every edge UP TO AND INCLUDING the one that first
+            # brings uncovered <= n*(1-c). Keying off the post-add `uncov` (the old
+            # `uncov > threshold`) drops exactly that crossing edge, leaving some
+            # sources with too few (or zero) edges. Instead key off the uncovered
+            # count BEFORE each edge: keep the edge while the previous count exceeded
+            # the threshold. For the first edge that count is n-1, so every node keeps
+            # at least one edge for any coverage < 100%.
+            prev_uncov = n - 1   # only the source is covered before any edge is added
             for neighbor, uncov in neighborhood:
                 for i, g in enumerate(G):
-                    if uncov > (n * (1 - coverages[i])):
+                    if prev_uncov > (n * (1 - coverages[i])):
                         g.add_edge(source, neighbor)
+                prev_uncov = uncov
 
     return G
 
