@@ -37,7 +37,11 @@ def classicBeamSearch(source, target, G, d_q, b, k):
                     if len(B) == b + 1:
                         heappop(B)
 
-    for _ in range(b - k):
+    # Trim the beam down to the k closest. B is a max-heap on -distance, so each
+    # heappop removes the current FARTHEST. The search may have reached fewer than
+    # b distinct nodes (sparse / low-coverage graph), so never pop more than we have
+    # and never below k — otherwise heappop on an empty B raises IndexError.
+    while len(B) > k:
         heappop(B)
 
     return B, nodes_expanded, len(D)
