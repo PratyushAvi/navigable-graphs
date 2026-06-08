@@ -22,25 +22,28 @@ def greedySetCover(permutation_matrix, source):
         list of (neighbor_id, uncov_count) tuples
     """
     n = permutation_matrix.shape[0]
-    covered = np.zeros(n, dtype=np.bool_)
-    covered[source] = True
+    # per-point threshold: point i is covered via candidate j iff
+    # permutation_matrix[i, j] < threshold[i]  (j is closer to i than the source).
+    threshold = permutation_matrix[:, source].astype(np.uint16)
+
+    # Work only over the still-uncovered points. The source covers itself.
+    # We keep an array of uncovered row indices and shrink it each iteration,
+    # so the score reduction gets cheaper as coverage grows — and we never
+    # materialise the n x n "sets" matrix.
+    uncovered_rows = np.delete(np.arange(n, dtype=np.intp), source)
     edges = []
-    uncovered = n - 1
 
-    # sets[i, j] = 1 if candidate j covers point i (j closer to i than source is).
-    # float32 so scoring is a single BLAS matmul; integers up to 2^24 are exact.
-    threshold = permutation_matrix[:, source]
-    sets_f32 = (permutation_matrix < threshold[:, None]).astype(np.float32)
-
-    while uncovered > 0:
-        scores = (~covered).astype(np.float32) @ sets_f32
-
+    while uncovered_rows.size > 0:
+        # rows of the permutation matrix for the points still uncovered
+        sub = permutation_matrix[uncovered_rows]                 # (u, n) uint16, view-copy
+        covers = sub < threshold[uncovered_rows, None]           # (u, n) bool
+        scores = covers.sum(axis=0)                              # (n,) int per candidate
         index = int(np.argmax(scores))
 
-        newly_covered = (sets_f32[:, index] != 0) & (~covered)
-        uncovered -= int(np.sum(newly_covered))
-        covered |= newly_covered
-        edges.append((index, uncovered))
+        # which currently-uncovered rows does this candidate cover?
+        newly = covers[:, index]
+        uncovered_rows = uncovered_rows[~newly]
+        edges.append((index, int(uncovered_rows.size)))
 
     return edges
 
@@ -56,9 +59,10 @@ def main():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=2000,
+        default=8000,
         help='Rows ranked per batch when building the permutation matrix. '
-             'Tune to fit RAM (~batch_size * n * 8 bytes for the temporary distance block).'
+             'Larger batches parallelise better across cores. Transient RAM per batch '
+             'is ~batch_size * n * 8 bytes (float32 block + int64 argsort output).'
     )
     args = parser.parse_args()
     DATASET = args.dataset
@@ -100,9 +104,10 @@ def main():
     for start in tqdm(range(0, n, batch_size), desc="ranking"):
         end = min(start + batch_size, n)
         batch_n = end - start
-        # squared euclidean distances for this row block, never the full matrix
+        # squared euclidean distances for this row block, never the full matrix.
+        # float32 is plenty for ordering and halves the transient + speeds the sort.
         dist_block = (sq_norms[start:end, None] + sq_norms[None, :]
-                      - 2.0 * (dataset[start:end] @ dataset.T))
+                      - 2.0 * (dataset[start:end] @ dataset.T)).astype(np.float32, copy=False)
         np.maximum(dist_block, 0.0, out=dist_block)
         order = np.argsort(dist_block, axis=1)            # nearest -> farthest
         ranks = np.empty((batch_n, n), dtype=np.uint16)
