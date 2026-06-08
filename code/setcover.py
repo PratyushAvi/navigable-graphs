@@ -36,15 +36,17 @@ def greedySetCover(permutation_matrix, source, inner_bar=False):
     # permutation_matrix[i, j] < threshold[i]  (j is closer to i than the source).
     threshold = permutation_matrix[:, source].astype(np.uint16)
 
-    # Build the boolean "sets" matrix ONCE for this source:
+    # Build the boolean "sets" matrix ONCE for this source, in FORTRAN (column-major)
+    # order so that covers[:, j] is a fast contiguous slice each iteration.
     #   covers[i, j] = True  iff candidate j covers point i.
-    # n x n bool = ~12.8 GB at n=113k. We then reduce over only the still-uncovered
-    # rows each iteration using a boolean mask — no per-iteration gather/copy, so
-    # peak memory is resident perm matrix (25.7 GB) + this bool matrix (12.8 GB).
-    covers = permutation_matrix < threshold[:, None]             # (n, n) bool, built once
+    # n x n bool ~ 12.8 GB at n=113k.
+    covers = np.asfortranarray(permutation_matrix < threshold[:, None])
 
-    uncovered = np.ones(n, dtype=np.bool_)
-    uncovered[source] = False                                    # source covers itself
+    # uncovered as float32 so scoring is a single BLAS matvec instead of a
+    # boolean-mask gather+copy (the old `covers[uncovered]` copied ~12.8 GB EVERY
+    # iteration). uncovered[i] = 1.0 while point i is still uncovered, else 0.0.
+    uncovered = np.ones(n, dtype=np.float32)
+    uncovered[source] = 0.0                                       # source covers itself
     n_uncovered = n - 1
     edges = []
 
@@ -52,14 +54,15 @@ def greedySetCover(permutation_matrix, source, inner_bar=False):
                 unit="pt", leave=False, position=1) if inner_bar else None)
 
     while n_uncovered > 0:
-        # score candidates by how many still-uncovered points they cover.
-        # restrict the reduction to uncovered rows (no copy of the matrix).
-        scores = covers[uncovered].sum(axis=0)                   # (n,) int per candidate
+        # scores[j] = number of still-uncovered points covered by candidate j.
+        # (1 x n) . (n x n) matvec over the fixed `covers` matrix — no copy.
+        scores = uncovered @ covers                              # (n,) float32
         index = int(np.argmax(scores))
 
-        newly = covers[:, index] & uncovered                    # uncovered rows j covers
+        # uncovered rows that candidate `index` covers (contiguous column slice)
+        newly = covers[:, index] & (uncovered != 0.0)
         newly_count = int(newly.sum())
-        uncovered &= ~newly
+        uncovered[newly] = 0.0
         n_uncovered -= newly_count
         edges.append((index, n_uncovered))
 
@@ -156,6 +159,10 @@ def main():
     outer = tqdm(remaining, desc="set cover", unit="src", disable=not IS_TTY)
 
     for source in outer:
+        if not IS_TTY and processed < 3:
+            # announce BEFORE the call so the log shows life even while source #1 runs
+            print(f"[set cover] starting source {source} "
+                  f"({processed + 1}/{n_rem})...", flush=True)
         t_src = time.time()
         edges = greedySetCover(permutation_matrix, source, inner_bar=IS_TTY)
         src_secs = time.time() - t_src
