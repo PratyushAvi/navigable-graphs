@@ -1,12 +1,19 @@
 import numpy as np
 from utils import *
 import argparse
+import sys
 import h5py
 from tqdm import tqdm
 import pandas as pd
 
+# When stdout is a real terminal we use animated tqdm bars. When it is redirected
+# to a file (e.g. a SLURM log viewed with `tail -f`), animated bars spam the log
+# with carriage-return redraws, so we switch to plain newline-terminated progress
+# lines emitted on an interval.
+IS_TTY = sys.stdout.isatty()
 
-def greedySetCover(permutation_matrix, source):
+
+def greedySetCover(permutation_matrix, source, inner_bar=False):
     """
     CPU (NumPy) greedy set cover.
 
@@ -17,6 +24,9 @@ def greedySetCover(permutation_matrix, source):
     Args:
         permutation_matrix: NumPy array (n, n) uint16
         source: int, source vertex index
+        inner_bar: if True (interactive terminal only), show a per-source tqdm bar
+                   tracking points covered. Disabled by default so it does not spam
+                   a redirected log (SLURM / `tail -f`).
 
     Returns:
         list of (neighbor_id, uncov_count) tuples
@@ -33,6 +43,9 @@ def greedySetCover(permutation_matrix, source):
     uncovered_rows = np.delete(np.arange(n, dtype=np.intp), source)
     edges = []
 
+    bar = (tqdm(total=uncovered_rows.size, desc=f"  cover src {source}",
+                unit="pt", leave=False, position=1) if inner_bar else None)
+
     while uncovered_rows.size > 0:
         # rows of the permutation matrix for the points still uncovered
         sub = permutation_matrix[uncovered_rows]                 # (u, n) uint16, view-copy
@@ -45,6 +58,12 @@ def greedySetCover(permutation_matrix, source):
         uncovered_rows = uncovered_rows[~newly]
         edges.append((index, int(uncovered_rows.size)))
 
+        if bar is not None:
+            bar.update(int(newly.sum()))
+            bar.set_postfix(edges=len(edges), uncov=uncovered_rows.size, refresh=False)
+
+    if bar is not None:
+        bar.close()
     return edges
 
 
@@ -115,15 +134,42 @@ def main():
         permutation_matrix[start:end] = ranks
         del dist_block, order, ranks
 
-    for source in tqdm(range(n), desc="set cover"):
-        if source in completed:
-            continue
-        edges = greedySetCover(permutation_matrix, source)
+    import time
+    total_edges = 0
+    processed = 0
+    remaining = [s for s in range(n) if s not in completed]
+    print(f"Set cover: {len(remaining)} of {n} sources to process "
+          f"({len(completed)} already done).", flush=True)
+
+    # Interactive terminal: animated tqdm bar. Redirected log (SLURM / tail -f):
+    # plain newline-terminated lines on an interval so the log stays readable.
+    log_every = max(1, len(remaining) // 200)   # ~200 progress lines total for a file
+    t_start = time.time()
+    outer = tqdm(remaining, desc="set cover", unit="src", disable=not IS_TTY)
+
+    for source in outer:
+        edges = greedySetCover(permutation_matrix, source, inner_bar=IS_TTY)
+        total_edges += len(edges)
+        processed += 1
         with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
             adj.write(f"{source} {edges}\n")
             comp.write(f"{source}\n")
 
-    print(f"Done with {DATASET}")
+        if IS_TTY:
+            outer.set_postfix(deg=len(edges),
+                              avg_deg=f"{total_edges / processed:.1f}",
+                              total_edges=total_edges, refresh=False)
+        elif processed % log_every == 0 or processed == len(remaining):
+            elapsed = time.time() - t_start
+            rate = processed / elapsed
+            eta = (len(remaining) - processed) / rate if rate > 0 else 0.0
+            print(f"[set cover] {processed}/{len(remaining)} sources "
+                  f"| last src={source} deg={len(edges)} "
+                  f"| avg_deg={total_edges / processed:.1f} "
+                  f"| {rate:.2f} src/s | ETA {eta / 3600:.1f}h",
+                  flush=True)
+
+    print(f"Done with {DATASET}: {processed} sources, {total_edges} edges total.", flush=True)
 
 
 if __name__ == "__main__":
