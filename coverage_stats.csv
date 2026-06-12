@@ -128,7 +128,6 @@ glove25,euclidean,robust-prune,25,1183514,1183514,99.96,17.04,16.0,16.0,1,87,1,8
 glove25,euclidean,robust-prune,25,1183514,1183514,99.97,18.47,17.0,18.0,1,90,1,83
 glove25,euclidean,robust-prune,25,1183514,1183514,99.98,20.7,20.0,20.0,1,91,1,89
 glove25,euclidean,robust-prune,25,1183514,1183514,99.99,25.13,24.0,24.0,1,98,1,99
-glove25,euclidean,robust-prune,25,1183514,1183514,100.0,50.41,50.0,43.0,1,141,1,422
 fashion_mnist,euclidean,robust-prune,784,60000,60000,99.95,9.72,8.0,9.0,1,106,1,55
 fashion_mnist,euclidean,robust-prune,784,60000,60000,99.96,10.02,9.0,9.0,1,107,1,55
 fashion_mnist,euclidean,robust-prune,784,60000,60000,99.97,10.57,9.0,10.0,1,107,1,57
@@ -141,3 +140,14 @@ fashion_mnist,euclidean,set-cover,784,41543,60000,99.97,5.4,5.0,3.0,1,60,1,450
 fashion_mnist,euclidean,set-cover,784,41543,60000,99.98,6.09,5.0,3.0,1,66,1,456
 fashion_mnist,euclidean,set-cover,784,41543,60000,99.99,7.07,6.0,3.0,1,71,1,465
 fashion_mnist,euclidean,set-cover,784,41543,60000,100.0,10.03,9.0,3.0,1,77,1,492
+glove25,euclidean,robust-prune,25,1183514,1183514,95.0,4.23,4.0,4.0,1,44,1,49
+glove25,euclidean,robust-prune,25,1183514,1183514,95.5,4.36,4.0,4.0,1,44,1,50
+glove25,euclidean,robust-prune,25,1183514,1183514,96.0,4.51,4.0,4.0,1,44,1,52
+glove25,euclidean,robust-prune,25,1183514,1183514,96.5,4.69,4.0,4.0,1,44,1,52
+glove25,euclidean,robust-prune,25,1183514,1183514,97.0,4.91,4.0,4.0,1,50,1,52
+glove25,euclidean,robust-prune,25,1183514,1183514,97.5,5.18,5.0,4.0,1,54,1,53
+glove25,euclidean,robust-prune,25,1183514,1183514,98.0,5.52,5.0,5.0,1,59,1,53
+glove25,euclidean,robust-prune,25,1183514,1183514,98.5,6.01,5.0,5.0,1,67,1,54
+glove25,euclidean,robust-prune,25,1183514,1183514,99.0,6.77,6.0,6.0,1,67,1,57
+glove25,euclidean,robust-prune,25,1183514,1183514,99.5,8.29,7.0,7.0,1,71,1,61
+glove25,euclidean,robust-prune,25,1183514,1183514,100.0,50.41,50.0,43.0,1,141,1,422
