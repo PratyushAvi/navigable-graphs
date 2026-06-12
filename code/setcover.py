@@ -1,19 +1,12 @@
 import numpy as np
 from utils import *
 import argparse
-import sys
 import h5py
 from tqdm import tqdm
 import pandas as pd
 
-# When stdout is a real terminal we use animated tqdm bars. When it is redirected
-# to a file (e.g. a SLURM log viewed with `tail -f`), animated bars spam the log
-# with carriage-return redraws, so we switch to plain newline-terminated progress
-# lines emitted on an interval.
-IS_TTY = sys.stdout.isatty()
 
-
-def greedySetCover(permutation_matrix, source, inner_bar=False):
+def greedySetCover(permutation_matrix, source):
     """
     CPU (NumPy) greedy set cover.
 
@@ -24,54 +17,31 @@ def greedySetCover(permutation_matrix, source, inner_bar=False):
     Args:
         permutation_matrix: NumPy array (n, n) uint16
         source: int, source vertex index
-        inner_bar: if True (interactive terminal only), show a per-source tqdm bar
-                   tracking points covered. Disabled by default so it does not spam
-                   a redirected log (SLURM / `tail -f`).    
 
     Returns:
         list of (neighbor_id, uncov_count) tuples
     """
     n = permutation_matrix.shape[0]
-    # per-point threshold: point i is covered via candidate j iff
-    # permutation_matrix[i, j] < threshold[i]  (j is closer to i than the source).
-    threshold = permutation_matrix[:, source].astype(np.uint16)
-
-    # Build the boolean "sets" matrix ONCE for this source, in FORTRAN (column-major)
-    # order so that covers[:, j] is a fast contiguous slice each iteration.
-    #   covers[i, j] = True  iff candidate j covers point i.
-    # n x n bool ~ 12.8 GB at n=113k.
-    covers = np.asfortranarray(permutation_matrix < threshold[:, None])
-
-    # uncovered as float32 so scoring is a single BLAS matvec instead of a
-    # boolean-mask gather+copy (the old `covers[uncovered]` copied ~12.8 GB EVERY
-    # iteration). uncovered[i] = 1.0 while point i is still uncovered, else 0.0.
-    uncovered = np.ones(n, dtype=np.float32)
-    uncovered[source] = 0.0                                       # source covers itself
-    n_uncovered = n - 1
+    covered = np.zeros(n, dtype=np.bool_)
+    covered[source] = True
     edges = []
+    uncovered = n - 1
 
-    bar = (tqdm(total=n_uncovered, desc=f"  cover src {source}",
-                unit="pt", leave=False, position=1) if inner_bar else None)
+    # sets[i, j] = 1 if candidate j covers point i (j closer to i than source is).
+    # float32 so scoring is a single BLAS matmul; integers up to 2^24 are exact.
+    threshold = permutation_matrix[:, source]
+    sets_f32 = (permutation_matrix < threshold[:, None]).astype(np.float32)
 
-    while n_uncovered > 0:
-        # scores[j] = number of still-uncovered points covered by candidate j.
-        # (1 x n) . (n x n) matvec over the fixed `covers` matrix — no copy.
-        scores = uncovered @ covers                              # (n,) float32
+    while uncovered > 0:
+        scores = (~covered).astype(np.float32) @ sets_f32
+
         index = int(np.argmax(scores))
 
-        # uncovered rows that candidate `index` covers (contiguous column slice)
-        newly = covers[:, index] & (uncovered != 0.0)
-        newly_count = int(newly.sum())
-        uncovered[newly] = 0.0
-        n_uncovered -= newly_count
-        edges.append((index, n_uncovered))
+        newly_covered = (sets_f32[:, index] != 0) & (~covered)
+        uncovered -= int(np.sum(newly_covered))
+        covered |= newly_covered
+        edges.append((index, uncovered))
 
-        if bar is not None:
-            bar.update(newly_count)
-            bar.set_postfix(edges=len(edges), uncov=n_uncovered, refresh=False)
-
-    if bar is not None:
-        bar.close()
     return edges
 
 
@@ -86,10 +56,9 @@ def main():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=8000,
+        default=2000,
         help='Rows ranked per batch when building the permutation matrix. '
-             'Larger batches parallelise better across cores. Transient RAM per batch '
-             'is ~batch_size * n * 8 bytes (float32 block + int64 argsort output).'
+             'Tune to fit RAM (~batch_size * n * 8 bytes for the temporary distance block).'
     )
     args = parser.parse_args()
     DATASET = args.dataset
@@ -131,10 +100,9 @@ def main():
     for start in tqdm(range(0, n, batch_size), desc="ranking"):
         end = min(start + batch_size, n)
         batch_n = end - start
-        # squared euclidean distances for this row block, never the full matrix.
-        # float32 is plenty for ordering and halves the transient + speeds the sort.
+        # squared euclidean distances for this row block, never the full matrix
         dist_block = (sq_norms[start:end, None] + sq_norms[None, :]
-                      - 2.0 * (dataset[start:end] @ dataset.T)).astype(np.float32, copy=False)
+                      - 2.0 * (dataset[start:end] @ dataset.T))
         np.maximum(dist_block, 0.0, out=dist_block)
         order = np.argsort(dist_block, axis=1)            # nearest -> farthest
         ranks = np.empty((batch_n, n), dtype=np.uint16)
@@ -142,53 +110,15 @@ def main():
         permutation_matrix[start:end] = ranks
         del dist_block, order, ranks
 
-    import time
-    total_edges = 0
-    processed = 0
-    remaining = [s for s in range(n) if s not in completed]
-    print(f"Set cover: {len(remaining)} of {n} sources to process "
-          f"({len(completed)} already done).", flush=True)
-
-    # Interactive terminal: animated tqdm bar. Redirected log (SLURM / tail -f):
-    # plain newline-terminated lines so the log stays readable.
-    # Log EVERY source for the first few (so you can see it is alive and how slow
-    # one source is), then thin out to ~200 lines total for the whole run.
-    n_rem = len(remaining)
-    log_every = max(1, n_rem // 200)
-    t_start = time.time()
-    outer = tqdm(remaining, desc="set cover", unit="src", disable=not IS_TTY)
-
-    for source in outer:
-        if not IS_TTY and processed < 3:
-            # announce BEFORE the call so the log shows life even while source #1 runs
-            print(f"[set cover] starting source {source} "
-                  f"({processed + 1}/{n_rem})...", flush=True)
-        t_src = time.time()
-        edges = greedySetCover(permutation_matrix, source, inner_bar=IS_TTY)
-        src_secs = time.time() - t_src
-        total_edges += len(edges)
-        processed += 1
+    for source in tqdm(range(n), desc="set cover"):
+        if source in completed:
+            continue
+        edges = greedySetCover(permutation_matrix, source)
         with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:
             adj.write(f"{source} {edges}\n")
             comp.write(f"{source}\n")
 
-        if IS_TTY:
-            outer.set_postfix(deg=len(edges),
-                              avg_deg=f"{total_edges / processed:.1f}",
-                              total_edges=total_edges, refresh=False)
-            continue
-
-        # log file: chatty at the start, then periodic
-        if processed <= 5 or processed % log_every == 0 or processed == n_rem:
-            elapsed = time.time() - t_start
-            rate = processed / elapsed
-            eta = (n_rem - processed) / rate if rate > 0 else 0.0
-            print(f"[set cover] {processed}/{n_rem} | src={source} deg={len(edges)} "
-                  f"| {src_secs:.1f}s/src | avg_deg={total_edges / processed:.1f} "
-                  f"| {rate:.3f} src/s | ETA {eta / 3600:.1f}h",
-                  flush=True)
-
-    print(f"Done with {DATASET}: {processed} sources, {total_edges} edges total.", flush=True)
+    print(f"Done with {DATASET}")
 
 
 if __name__ == "__main__":
