@@ -183,9 +183,13 @@ def main():
     new_df = pd.DataFrame(all_new_rows, columns=COLUMNS)
 
     if not existing_stats.empty and all_new_rows:
-        reprocessed_keys = {(r[0], r[1], r[2]) for r in all_new_rows}
-        mask = existing_stats.apply(
-            lambda row: (row['dataset'], row['metric'], row['method']) in reprocessed_keys, axis=1
+        # Append new coverages, keeping all existing ones. Only overwrite an
+        # existing row when it has the same (dataset, metric, method, coverage)
+        # as a freshly computed row — those duplicates take the new values.
+        key_cols = ['dataset', 'metric', 'method', 'coverage']
+        new_keys = set(map(tuple, new_df[key_cols].itertuples(index=False, name=None)))
+        mask = existing_stats[key_cols].apply(
+            lambda row: tuple(row) in new_keys, axis=1
         )
         combined = pd.concat([existing_stats[~mask], new_df], ignore_index=True)
     elif not existing_stats.empty:
