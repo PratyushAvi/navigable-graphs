@@ -1,7 +1,6 @@
 import collections
 import os
 import numpy as np
-import networkx as nx
 from heapq import heappush, heappop
 import argparse
 import h5py
@@ -11,11 +10,13 @@ from tqdm import tqdm
 
 def classicBeamSearch(source, target, G, d_q, b, k):
     """
-    G:   nx.DiGraph
+    G:   (indptr, neighbors) CSR adjacency. successors of u are
+         neighbors[indptr[u]:indptr[u+1]].
     d_q: (n,) array of squared euclidean distances from every point to target
     b:   beam width
     k:   number of nearest neighbours to return
     """
+    indptr, neighbors = G
     D = set([source])
     C = [(d_q[source], source)] # min-heap
     B = [(-d_q[source], source)] # max-heap
@@ -27,7 +28,8 @@ def classicBeamSearch(source, target, G, d_q, b, k):
         if len(B) == b and -1 * B[0][0] < dist:
             break
 
-        for y in G.successors(node):
+        for y in neighbors[indptr[node]:indptr[node + 1]]:
+            y = int(y)
             if y not in D:
                 D.add(y)
                 if len(B) < b or -1 * B[0][0] > d_q[y]:
@@ -50,7 +52,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--adj_list", required=True, help="Adjacency list file")
     parser.add_argument("--dataset", required=True, help="Dataset file")
-    parser.add_argument("--save_path", required=True, help="Place to save CSV")
+    parser.add_argument("--save_path", required=True, help="Directory to save the summary CSV into")
+    parser.add_argument("--out_csv", default="beam_search_long.csv",
+                        help="Summary CSV filename (joined to --save_path), long/df_long format")
     parser.add_argument("--beam_widths", type=int, nargs='+', default=[1], help="One or more beam widths")
     parser.add_argument("--step_size", type=float, default=1, help="Coverage decrement step size")
     parser.add_argument("--min_coverage", type=float, default=90, help="Minimum coverage amount")
@@ -72,7 +76,7 @@ def main():
     Y = data['test'][:]
     n = X.shape[0]
 
-    print(f"Building networkx graphs...")
+    print(f"Building CSR graphs...")
 
     coverage = [c / 100 for c in np.arange(100, args.min_coverage, -1 * args.step_size)]
 
@@ -80,7 +84,7 @@ def main():
 
     print(f"Avg out-degrees\n--------------")
     for i, g in enumerate(G):
-        print(f"{coverage[i] * 100:0.1f}% navigable: {g.number_of_edges() / n:0.2f}")
+        print(f"{coverage[i] * 100:0.1f}% navigable: {len(g[1]) / n:0.2f}")
     print("--------------")
 
     RECALL_KS     = [1, 10, 100]
@@ -154,43 +158,46 @@ def main():
     dfs_test = run_search(Y[test_indices], query_indices=test_indices)
     print_summary(dfs_test, "Test queries")
 
-    # --- Summary CSV: one row per (dataset, beam_width, k), append if exists ---
+    # --- Summary CSV: long (df_long) format, one row per
+    # (dataset, beam_width, k, coverage). Each new run upserts on that key:
+    # an existing row for the same key is replaced, otherwise a new row is added. ---
+    LONG_KEY  = ['dataset', 'beam_width', 'k', 'coverage']
+    LONG_VALS = ['avg_edges', 'train_relevant', 'train_seen', 'train_expanded']
+
     summary_rows = []
     for bw in beam_widths:
         for k in RECALL_KS:
             df = dfs_test[(bw, k)]
-            row = {
-                'dataset':    DATASET['name'],
-                'beam_width': bw,
-                'k':          k,
-            }
             for gi, g in enumerate(G):
-                row[f'avg_edges_{coverage[gi]}']        = g.number_of_edges() / n
-                row[f'train_relevant_{coverage[gi]}']   = df[f'relevant_{coverage[gi]}'].mean()
-                row[f'train_seen_{coverage[gi]}']       = df[f'seen_{coverage[gi]}'].mean()
-                row[f'train_expanded_{coverage[gi]}']   = df[f'expanded_{coverage[gi]}'].mean()
-            summary_rows.append(row)
+                summary_rows.append({
+                    'dataset':        DATASET['name'],
+                    'beam_width':     bw,
+                    'k':              k,
+                    'coverage':       coverage[gi],
+                    'avg_edges':      len(g[1]) / n,
+                    'train_relevant': df[f'relevant_{coverage[gi]}'].mean(),
+                    'train_seen':     df[f'seen_{coverage[gi]}'].mean(),
+                    'train_expanded': df[f'expanded_{coverage[gi]}'].mean(),
+                })
 
-    summary_df   = pd.DataFrame(summary_rows)
-    summary_path = f"{args.save_path}/beam_search_summary_test_sc.csv"
+    summary_df   = pd.DataFrame(summary_rows, columns=LONG_KEY + LONG_VALS)
+    summary_path = os.path.join(args.save_path, args.out_csv)
 
     if os.path.exists(summary_path):
         existing = pd.read_csv(summary_path)
-        mask = (existing['dataset'] == DATASET['name']) & (existing['beam_width'].isin(beam_widths))
-        if 'k' in existing.columns:
-            mask = mask & existing['k'].isin(RECALL_KS)
-        existing   = existing[~mask]
-        summary_df = pd.concat([existing, summary_df], ignore_index=True)
+        # Drop any existing rows whose (dataset, beam_width, k, coverage) this run
+        # recomputes, then append the fresh rows (upsert).
+        combined = pd.concat([existing, summary_df], ignore_index=True)
+        summary_df = combined.drop_duplicates(subset=LONG_KEY, keep='last').reset_index(drop=True)
 
     summary_df.to_csv(summary_path, index=False)
-    print(f"\nSummary written to {summary_path}")
+    print(f"\nSummary written to {summary_path} ({len(summary_df)} rows)")
 
 def load_graphs(adj_list_path, n, coverages):
     import ast
 
-    G = [nx.DiGraph() for _ in range(len(coverages))]
-    for g in G:
-        g.add_nodes_from(range(n))
+    # Per coverage, per source, accumulate kept neighbors. Flattened to CSR below.
+    adj = [[[] for _ in range(n)] for _ in range(len(coverages))]
 
     with open(adj_list_path, 'r') as f:
         for line in tqdm(f):
@@ -212,10 +219,25 @@ def load_graphs(adj_list_path, n, coverages):
             # at least one edge for any coverage < 100%.
             prev_uncov = n - 1   # only the source is covered before any edge is added
             for neighbor, uncov in neighborhood:
-                for i, g in enumerate(G):
+                for i in range(len(coverages)):
                     if prev_uncov > (n * (1 - coverages[i])):
-                        g.add_edge(source, neighbor)
+                        adj[i][source].append(neighbor)
                 prev_uncov = uncov
+
+    # Flatten each coverage's adjacency into CSR: (indptr, neighbors).
+    # successors of u are neighbors[indptr[u]:indptr[u+1]].
+    G = []
+    for gi in range(len(coverages)):
+        degrees = np.fromiter((len(adj[gi][u]) for u in range(n)), dtype=np.int64, count=n)
+        indptr = np.empty(n + 1, dtype=np.int64)
+        indptr[0] = 0
+        np.cumsum(degrees, out=indptr[1:])
+        total = int(indptr[-1])
+        neighbors = np.fromiter(
+            (v for u in range(n) for v in adj[gi][u]),
+            dtype=np.int32, count=total,
+        )
+        G.append((indptr, neighbors))
 
     return G
 

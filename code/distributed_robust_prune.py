@@ -13,6 +13,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True, help="Path to dataset directory")
     parser.add_argument("--save_path", required=True, help="Path to save results")
+    parser.add_argument("--dataset", required=True, help="Dataset name, used for output/checkpoint filenames")
     parser.add_argument("--num_points", type=int, default=10_000)
     parser.add_argument("--batch", type=int, default=50)
     parser.add_argument("--num_shards", type=int, default=17)
@@ -51,6 +52,7 @@ def main():
     coordinator = CoordinatorActor.options(num_cpus=args.coordinator_cpus).remote(
         EFS_PATH=args.data,
         SAVE_PATH=args.save_path,
+        dataset=args.dataset,
         num_points=args.num_points,
         batch=args.batch,
         workers=workers,
@@ -67,16 +69,21 @@ def main():
 # ---------------------------------------------------------------------------
 
 class Coordinator:
-    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch):
+    def __init__(self, EFS_PATH, SAVE_PATH, dataset, num_points, batch):
         os.environ["RAY_DEDUP_LOGS"] = "0"
         self.EFS_PATH   = EFS_PATH
-        self.SAVE_PATH = SAVE_PATH
+        self.SAVE_PATH  = SAVE_PATH
+        self.dataset    = dataset
         self.num_points = num_points
         self.batch      = batch
 
+        self.computed_path = f"{self.SAVE_PATH}/{self.dataset}-computed.txt"
+        self.adj_list_path = f"{self.SAVE_PATH}/adj-list-{self.dataset}.txt"
+
         self.vector_ids = np.load(f"{self.EFS_PATH}/ids.npy",      mmap_mode='r')
-        self.dataset    = np.load(f"{self.EFS_PATH}/vectors.npy",   mmap_mode='r')
+        self.vectors    = np.load(f"{self.EFS_PATH}/vectors.npy",   mmap_mode='r')
         self.norms      = np.load(f"{self.EFS_PATH}/sq_norms.npy",  mmap_mode='r')
+        self.dim        = self.vectors.shape[1]
 
         self.neighborhoods = {}
         self.active        = set()
@@ -88,9 +95,10 @@ class Coordinator:
         self.uncov_current = {}   # vec_id -> current total uncov
         self.point_state   = {}   # vec_id -> 'INIT' | 'UPDATE'
 
-        with open(f"{self.SAVE_PATH}/spacev1b-euclidean-computed.txt", "r") as f:
-            for p in f.readlines():
-                self.computed.add(int(p.strip()))
+        if os.path.exists(self.computed_path):
+            with open(self.computed_path, "r") as f:
+                for p in f.readlines():
+                    self.computed.add(int(p.strip()))
 
         print(f"Resuming from {len(self.computed)} already computed neighborhoods.", flush=True)
 
@@ -203,11 +211,11 @@ class Coordinator:
 
     def sendMessages(self, compute_distances, message):
         if compute_distances:
-            vecs   = self.dataset[compute_distances].astype(np.float32)
+            vecs   = self.vectors[compute_distances].astype(np.float32)
             norms_ = self.norms[compute_distances].astype(np.float32)
         else:
-            vecs   = np.empty((0, 100), dtype=np.float32)
-            norms_ = np.empty((0,),     dtype=np.float32)
+            vecs   = np.empty((0, self.dim), dtype=np.float32)
+            norms_ = np.empty((0,),          dtype=np.float32)
 
         t0            = time.time()
         futures       = [w.message.remote(vecs, norms_, compute_distances, message) for w in self.workers]
@@ -228,9 +236,9 @@ class Coordinator:
         return {vid: responses[vid][0] for vid in responses}, rtt, dict(uncov_totals)
 
     def writeNeighborhood(self, vec_id):
-        with open(f"{self.SAVE_PATH}/spacev1b-euclidean-computed.txt", 'a+') as f:
+        with open(self.computed_path, 'a+') as f:
             f.write(f"{vec_id}\n")
-        with open(f"{self.SAVE_PATH}/adj-list-spacev1b-euclidean.txt", 'a+') as f:
+        with open(self.adj_list_path, 'a+') as f:
             f.write(f"{self.neighborhoods[vec_id]}\n")
 
 
@@ -254,9 +262,11 @@ class Worker:
         self.EFS_PATH = EFS_PATH
         print(f"[Worker {shard_id}] init start  node={socket.gethostname()}", flush=True)
 
-        t0    = time.time()
-        total = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape[0]
-        print(f"[Worker {shard_id}] shape check: {time.time()-t0:.2f}s  total={total:,}", flush=True)
+        t0          = time.time()
+        vshape      = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape
+        total, dim  = vshape[0], vshape[1]
+        self.dim    = dim
+        print(f"[Worker {shard_id}] shape check: {time.time()-t0:.2f}s  total={total:,}  dim={dim}", flush=True)
 
         shard_size   = total // num_shards
         self.start   = shard_id * shard_size
@@ -270,13 +280,13 @@ class Worker:
         print(f"[Worker {shard_id}] mmap open: {time.time()-t1:.2f}s", flush=True)
 
         n      = self.end - self.start
-        self.X = np.empty((n, 102), dtype=np.float32)
+        self.X = np.empty((n, dim + 2), dtype=np.float32)
         t2     = time.time()
-        self.X[:, :100] = dataset[self.start:self.end]
+        self.X[:, :dim] = dataset[self.start:self.end]
         print(f"[Worker {shard_id}] vectors loaded: {time.time()-t2:.2f}s", flush=True)
         t3     = time.time()
-        self.X[:, 100]  = 1.0
-        self.X[:, 101]  = norms[self.start:self.end]
+        self.X[:, dim]     = 1.0
+        self.X[:, dim + 1] = norms[self.start:self.end]
         print(f"[Worker {shard_id}] norms loaded: {time.time()-t3:.2f}s", flush=True)
         del dataset, norms
         print(f"[Worker {shard_id}] init done: total={time.time()-t0:.2f}s", flush=True)
@@ -442,9 +452,9 @@ class WorkerActor(Worker):
 
 @ray.remote
 class CoordinatorActor(Coordinator):
-    def __init__(self, EFS_PATH, SAVE_PATH, num_points, batch, workers):
+    def __init__(self, EFS_PATH, SAVE_PATH, dataset, num_points, batch, workers):
         self.workers = workers
-        super().__init__(EFS_PATH, SAVE_PATH, num_points, batch)
+        super().__init__(EFS_PATH, SAVE_PATH, dataset, num_points, batch)
 
 
 if __name__ == '__main__':
