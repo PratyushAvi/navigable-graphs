@@ -39,8 +39,9 @@ srun --nodes=1 --ntasks=1 --cpu-bind=none --nodelist=$HEAD_NODE $SING /bin/bash 
         --num-cpus=\$SLURM_CPUS_PER_TASK \
         --disable-usage-stats && \
     python /scratch/pa2439/ANN-Search/navigable_graph_results/code/distributed_robust_prune.py \
-        --data $SCRATCH/ANN-Search/datasets/spacev1b \
+        --data $SCRATCH/ANN-Search/datasets/bigann \
         --save_path $SCRATCH/ANN-Search/navigable_graph_results/new_results \
+        --dataset bigann \
         --num_points 10000 \
         --batch 50 \
         --num_shards 8 \
