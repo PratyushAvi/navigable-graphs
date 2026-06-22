@@ -16,13 +16,31 @@ COLUMNS = ['dataset', 'metric', 'method', 'dimensions', 'points computed', 'tota
 def main():
     parser = argparse.ArgumentParser(description='Compute graph degree stats at multiple coverage levels')
     parser.add_argument('--dataset', type=str, default=None,
-                        help='Specific dataset to process. If omitted, processes all incomplete datasets.')
+                        help='Specific dataset to process. If omitted, processes all incomplete datasets. '
+                             'Required when --adj-list is given (used as the dataset name in output).')
+    parser.add_argument('--adj-list', type=str, default=None,
+                        help='Path to a single adjacency-list file to process. When set, skips scanning '
+                             'SAVEPATH for robust-prune/set-cover files; requires --dataset.')
+    parser.add_argument('--computed', type=str, default=None,
+                        help='Path to the computed-sources file for --adj-list (the source ids, one per '
+                             'line). Provide for robust-prune outputs whose adj-list lines are bare '
+                             'neighborhoods; omit for "<source_id> <neighborhood>" lines.')
+    parser.add_argument('--metric', type=str, default='',
+                        help='Metric label, recorded in the output only; has no effect on computation '
+                             '(default: empty).')
+    parser.add_argument('--method', type=str, default='robust-prune', choices=['robust-prune', 'set-cover'],
+                        help='Method label for the output when using --adj-list (default: robust-prune).')
     parser.add_argument('--min-coverage', type=float, default=90.0,
                         help='Minimum coverage level in percent (default: 90.0)')
     parser.add_argument('--max-coverage', type=float, default=100.0,
                         help='Maximum coverage level in percent (default: 100.0)')
     parser.add_argument('--step-size', type=float, default=0.5,
                         help='Step size between coverage levels in percent (default: 0.5)')
+    parser.add_argument('--total-points', type=int, required=True,
+                        help='Size of the full dataset that coverage is measured against '
+                             '(the universe uncov counts range over, e.g. 1000000000 for bigann)')
+    parser.add_argument('--dimensions', type=int, default=-1,
+                        help='Vector dimensionality, recorded in the output for reference (default: -1)')
     args = parser.parse_args()
 
     # Build sorted list of coverage levels
@@ -34,47 +52,64 @@ def main():
     n_cov = len(coverages)
     print(f"Coverage levels ({n_cov}): {coverages[0]}% to {coverages[-1]}% step {args.step_size}%")
 
-    DATASETS = {}
-    dataset_records = pd.read_csv("/scratch/pa2439/ANN-Search/navigable_graph_results/datasets.csv").to_dict('records')
-    for d in dataset_records:
-        DATASETS[d['name']] = d
-
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
     stats_file = "/scratch/pa2439/ANN-Search/navigable_graph_results/coverage_stats.csv"
 
-    adjLists = (
-        [(f, 'robust-prune') for f in glob.glob(f"{SAVEPATH}/adj-list-*.txt")] +
-        [(f, 'set-cover')    for f in glob.glob(f"{SAVEPATH}/set-cover-adj-list-*.txt")]
-    )
-
-    def parse_filename(file, method):
-        stem = os.path.basename(file).replace(".txt", "")
-        parts = stem.split("-")[4:] if method == 'set-cover' else stem.split("-")[2:]
-        return "-".join(parts[:-1]), parts[-1]
-
-    # Load existing stats; determine which (dataset, metric, method) combos are fully done
+    # Load existing stats (used for the merge at the end, and for skipping
+    # already-complete combos when scanning SAVEPATH).
     if os.path.exists(stats_file):
         existing_stats = pd.read_csv(stats_file)
         if 'method' not in existing_stats.columns:
             existing_stats['method'] = 'robust-prune'
-        done_keys = set()
-        cov_set_required = set(coverages)
-        for key, grp in existing_stats.groupby(['dataset', 'metric', 'method']):
-            if cov_set_required.issubset(set(grp['coverage'])):
-                done_keys.add(key)
     else:
         existing_stats = pd.DataFrame()
+
+    if args.adj_list is not None:
+        # Explicit single-file mode: caller supplies the file and its labels.
+        if args.dataset is None:
+            parser.error("--adj-list requires --dataset")
+        if not os.path.exists(args.adj_list):
+            parser.error(f"--adj-list path does not exist: {args.adj_list}")
+        if args.computed is not None and not os.path.exists(args.computed):
+            parser.error(f"--computed path does not exist: {args.computed}")
+
+        labels = {args.adj_list: (args.dataset, args.metric)}
+
+        def parse_filename(file, method):
+            return labels[file]
+
+        files_to_process = [(args.adj_list, args.method)]
+        print(f"Processing single adjacency list: {args.adj_list} "
+              f"[{args.dataset}-{args.metric}, {args.method}]")
+    else:
+        adjLists = (
+            [(f, 'robust-prune') for f in glob.glob(f"{SAVEPATH}/adj-list-*.txt")] +
+            [(f, 'set-cover')    for f in glob.glob(f"{SAVEPATH}/set-cover-adj-list-*.txt")]
+        )
+
+        def parse_filename(file, method):
+            stem = os.path.basename(file).replace(".txt", "")
+            parts = stem.split("-")[4:] if method == 'set-cover' else stem.split("-")[2:]
+            return "-".join(parts[:-1]), parts[-1]
+
+        # Determine which (dataset, metric, method) combos are already fully done
         done_keys = set()
+        if not existing_stats.empty:
+            cov_set_required = set(coverages)
+            for key, grp in existing_stats.groupby(['dataset', 'metric', 'method']):
+                if cov_set_required.issubset(set(grp['coverage'])):
+                    done_keys.add(key)
 
-    files_to_process = []
-    for file, method in adjLists:
-        dataset_name, metric = parse_filename(file, method)
-        if args.dataset is not None and dataset_name != args.dataset:
-            continue
-        if (dataset_name, metric, method) not in done_keys:
-            files_to_process.append((file, method))
+        files_to_process = []
+        for file, method in adjLists:
+            dataset_name, metric = parse_filename(file, method)
+            if args.dataset is not None and dataset_name != args.dataset:
+                continue
+            if (dataset_name, metric, method) not in done_keys:
+                files_to_process.append((file, method))
 
-    print(f"Found {len(files_to_process)} files to process out of {len(adjLists)} total")
+        print(f"Found {len(files_to_process)} files to process out of {len(adjLists)} total")
+
     if not files_to_process:
         print("Nothing to do.")
         return
@@ -83,7 +118,7 @@ def main():
 
     for file, method in tqdm(files_to_process, desc="Processing adjacency lists"):
         dataset_name, metric = parse_filename(file, method)
-        n_nodes = DATASETS[dataset_name]['train']
+        n_nodes = args.total_points
         print(f"\nProcessing {dataset_name}-{metric} [{method}] ({n_nodes} nodes)")
 
         # uncov_left threshold for each coverage level (non-increasing)
@@ -97,12 +132,24 @@ def main():
 
         counter = 0
 
-        spacev1b_sources = None
-        if dataset_name == 'spacev1b':
-            computed_txt = f"{SAVEPATH}/spacev1b-euclidean-computed.txt"
+        # distributed_robust_prune writes the source ids to a separate
+        # computed-sources file and bare neighborhoods (no source prefix) to the
+        # adj-list. set-cover / legacy outputs instead prefix each adj-list line
+        # with "<source_id> ". In single-file mode the caller passes --computed
+        # explicitly; in scan mode we look for {dataset}-{metric}-computed.txt.
+        if args.adj_list is not None:
+            computed_txt = args.computed
+        elif method == 'robust-prune':
+            computed_txt = f"{SAVEPATH}/{dataset_name}-{metric}-computed.txt"
+            computed_txt = computed_txt if os.path.exists(computed_txt) else None
+        else:
+            computed_txt = None
+
+        computed_sources = None
+        if computed_txt is not None:
             with open(computed_txt, 'r') as cf:
-                spacev1b_sources = [int(p.strip()) for p in cf if p.strip()]
-            print(f"  spacev1b: {len(spacev1b_sources)} computed sources")
+                computed_sources = [int(p.strip()) for p in cf if p.strip()]
+            print(f"  {dataset_name}-{metric}: {len(computed_sources)} computed sources")
 
         with open(file, 'r') as f:
             first_line = f.readline().strip()
@@ -116,8 +163,8 @@ def main():
                 if not line:
                     continue
 
-                if spacev1b_sources is not None:
-                    if counter >= len(spacev1b_sources):
+                if computed_sources is not None:
+                    if counter >= len(computed_sources):
                         break
                     neighborhood = ast.literal_eval(line)
                 else:
@@ -164,7 +211,7 @@ def main():
                 dataset_name,
                 metric,
                 method,
-                DATASETS[dataset_name]['dimensions'],
+                args.dimensions,
                 counter,
                 n_nodes,
                 cov,
