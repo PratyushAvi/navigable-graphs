@@ -12,3 +12,19 @@ python distributed_robust_prune.py --data=$SCRATCH/ANN-Search/datasets/spacev1b 
 /scratch/pa2439/ANN-Search/datasets/mnist-784-euclidean.hdf5
 
 python beam_search.py --adj_list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-mnist-euclidean.txt --dataset /scratch/pa2439/ANN-Search/datasets/mnist-784-euclidean.hdf5 --save_path /scratch/pa2439/ANN-Search/navigable_graph_results/
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-bigann.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/bigann-computed.txt \
+    --dataset bigann \
+    --metric euclidean \
+    --total-points 1000000000 \
+    --dimensions 128
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-yandex_deep.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/yandex_deep-computed.txt \
+    --dataset yandex_deep \
+    --metric euclidean \
+    --total-points 1000000000 \
+    --dimensions 96
