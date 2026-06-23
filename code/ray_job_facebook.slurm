@@ -1,12 +1,12 @@
 #!/bin/bash
-# 9 nodes total: node 0 = Ray head + coordinator, nodes 1-8 = Ray workers
+# 17 nodes total: node 0 = Ray head + coordinator, nodes 1-16 = Ray workers
 # Submit: sbatch ray_job.slurm
 
 #SBATCH --job-name=fb_nvgbl
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=pa2439@nyu.edu
 #SBATCH --account=torch_pr_929_general
-#SBATCH --nodes=9
+#SBATCH --nodes=17
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256GB
@@ -44,7 +44,7 @@ srun --nodes=1 --ntasks=1 --cpu-bind=none --nodelist=$HEAD_NODE $SING /bin/bash 
         --dataset facebook_sim_searchnet++ \
         --num_points 10000 \
         --batch 50 \
-        --num_shards 8 \
+        --num_shards 16 \
         --cpus 32 \
         --coordinator_cpus 32
 " &
@@ -52,9 +52,9 @@ srun --nodes=1 --ntasks=1 --cpu-bind=none --nodelist=$HEAD_NODE $SING /bin/bash 
 # Give head a moment to bind the port before workers connect
 sleep 15
 
-# Start Ray workers on nodes 1-8
+# Start Ray workers on nodes 1-16
 WORKER_NODES=$(IFS=,; echo "${NODES[*]:1}")
-srun --nodes=8 --ntasks=8 --cpu-bind=none --nodelist=$WORKER_NODES $SING /bin/bash -c "
+srun --nodes=16 --ntasks=16 --cpu-bind=none --nodelist=$WORKER_NODES $SING /bin/bash -c "
     source /ext3/miniforge3/etc/profile.d/conda.sh && \
     conda activate big_ann && \
     ray start \
