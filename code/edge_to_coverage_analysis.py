@@ -50,7 +50,7 @@ def main():
     print(f"Edge counts ({n_e}): {edge_counts[0]} to {edge_counts[-1]} step {args.step_size}")
 
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
-    stats_file = f"/scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage/edge_to_coverage_stats_{args.dataset}.csv"
+    STATS_DIR = "/scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage"
 
     if args.adj_list is not None:
         # Explicit single-file mode: caller supplies the file and its labels.
@@ -212,7 +212,9 @@ def main():
     # --- Save to CSV (one file per dataset) ---
     new_df = pd.DataFrame(all_new_rows, columns=COLUMNS)
 
+    os.makedirs(STATS_DIR, exist_ok=True)
     for dataset_name, grp in new_df.groupby('dataset'):
+        stats_file = os.path.join(STATS_DIR, f"edge_to_coverage_stats_{dataset_name}.csv")
         grp.to_csv(stats_file, index=False)
         print(f"\nSaved {len(grp)} rows → {stats_file}")
 
