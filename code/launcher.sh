@@ -28,3 +28,11 @@ python updated_analysis.py \
     --metric euclidean \
     --total-points 1000000000 \
     --dimensions 96
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-facebook_sim_searchnet++.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/facebook_sim_searchnet++-computed.txt \
+    --dataset facebook_sim_searchnet++ \
+    --metric euclidean \
+    --total-points 1000000000 \
+    --dimensions 256
