@@ -32,8 +32,9 @@ def main():
                         help='Method label for the output when using --adj-list (default: robust-prune).')
     parser.add_argument('--min-edges', type=int, default=1,
                         help='Minimum number of edges to report coverage for (default: 1)')
-    parser.add_argument('--max-edges', type=int, default=64,
-                        help='Maximum number of edges to report coverage for (default: 64)')
+    parser.add_argument('--max-edges', type=int, default=None,
+                        help='Maximum number of edges to report coverage for. If omitted, '
+                             'defaults to the largest out-degree seen in the data (per dataset).')
     parser.add_argument('--step-size', type=int, default=1,
                         help='Step size between edge counts (default: 1)')
     parser.add_argument('--total-points', type=int, required=True,
@@ -43,11 +44,14 @@ def main():
                         help='Vector dimensionality, recorded in the output for reference (default: -1)')
     args = parser.parse_args()
 
-    # Build sorted list of edge counts to report coverage at.
-    edge_counts = list(range(args.min_edges, args.max_edges + 1, args.step_size))
-    n_e = len(edge_counts)
-    max_e = edge_counts[-1]
-    print(f"Edge counts ({n_e}): {edge_counts[0]} to {edge_counts[-1]} step {args.step_size}")
+    # Edge counts to report coverage at are built per file below: when
+    # --max-edges is omitted we cap at that file's largest out-degree, so the
+    # curve runs exactly as far as the data supports.
+    if args.max_edges is not None:
+        print(f"Edge counts: {args.min_edges} to {args.max_edges} step {args.step_size}")
+    else:
+        print(f"Edge counts: {args.min_edges} to <max out-degree per dataset> "
+              f"step {args.step_size}")
 
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
     STATS_DIR = "/scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage"
@@ -100,13 +104,11 @@ def main():
         n_nodes = args.total_points
         print(f"\nProcessing {dataset_name}-{metric} [{method}] ({n_nodes} nodes)")
 
-        # cov_sum[e_idx] = sum over sources of coverage (%) achieved using the
-        # first edge_counts[e_idx] edges of that source's neighborhood.
-        # We also track min/max per edge count for reporting.
-        cov_sum = np.zeros(n_e, dtype=np.float64)
-        cov_min = np.full(n_e, np.inf, dtype=np.float64)
-        cov_max = np.full(n_e, -np.inf, dtype=np.float64)
-        cov_all = []  # per-source coverage vectors, for the median
+        # Per source, store its coverage-by-edge curve (length = its degree).
+        # We can't fix the reported edge counts until we've seen every source,
+        # since --max-edges may default to the largest out-degree in the file.
+        per_source_cov = []  # list of 1-D float arrays, cov_by_edge[j] for j<deg
+        max_deg = 0
 
         counter = 0
 
@@ -155,42 +157,49 @@ def main():
                 # (n_nodes - uncov_after_k) / n_nodes * 100, where uncov_after_k
                 # is the uncov value recorded on the k-th edge (edges are stored
                 # in insertion order, so uncov is non-increasing along the list).
-                #
-                # If a source has degree d < k, using k edges is the same as
-                # using all d edges: its coverage saturates at its final value
-                # (100% when the neighborhood fully covers the universe). So a
-                # source with degree d contributes its degree-d coverage to every
-                # edge count >= d.
+                # cov_by_edge[j] = coverage using the first (j+1) edges.
                 deg = len(neighborhood)
-                # coverage at each of this source's own edge indices (1..deg)
-                # cov_by_edge[j] = coverage using first (j+1) edges
                 cov_by_edge = np.empty(deg, dtype=np.float64)
                 for j, (neighbor, uncov) in enumerate(neighborhood):
                     cov_by_edge[j] = (n_nodes - uncov) / n_nodes * 100.0
 
-                cov_src = np.empty(n_e, dtype=np.float64)
-                for e_idx, k in enumerate(edge_counts):
-                    if deg == 0:
-                        cov_src[e_idx] = 0.0
-                    elif k >= deg:
-                        cov_src[e_idx] = cov_by_edge[deg - 1]
-                    else:
-                        cov_src[e_idx] = cov_by_edge[k - 1]
-
-                cov_sum += cov_src
-                cov_min = np.minimum(cov_min, cov_src)
-                cov_max = np.maximum(cov_max, cov_src)
-                cov_all.append(cov_src)
+                per_source_cov.append(cov_by_edge)
+                if deg > max_deg:
+                    max_deg = deg
 
         if counter == 0:
             print(f"  No sources found — skipping")
             continue
 
-        print(f"  Processed {counter} sources")
+        print(f"  Processed {counter} sources (max out-degree {max_deg})")
 
-        cov_matrix = np.array(cov_all, dtype=np.float64)  # (counter, n_e)
-        cov_mean = cov_sum / counter
+        # Now fix the edge counts to report. Default the upper bound to the
+        # largest out-degree seen; beyond that no source has more edges.
+        max_edges = args.max_edges if args.max_edges is not None else max_deg
+        edge_counts = list(range(args.min_edges, max_edges + 1, args.step_size))
+        if not edge_counts:
+            print(f"  No edge counts in [{args.min_edges}, {max_edges}] — skipping")
+            continue
+        n_e = len(edge_counts)
+
+        # Build the (counter, n_e) coverage matrix. If a source has degree
+        # d < k, using k edges is the same as using all d edges: its coverage
+        # saturates at its final value (100% when it fully covers). So a source
+        # of degree d contributes its degree-d coverage to every edge count >= d.
+        edge_idx = np.array(edge_counts) - 1  # 0-based positions to sample
+        cov_matrix = np.empty((counter, n_e), dtype=np.float64)
+        for i, cov_by_edge in enumerate(per_source_cov):
+            deg = len(cov_by_edge)
+            if deg == 0:
+                cov_matrix[i, :] = 0.0
+            else:
+                # clamp requested edge index to this source's last edge (deg-1)
+                cov_matrix[i, :] = cov_by_edge[np.minimum(edge_idx, deg - 1)]
+
+        cov_mean = cov_matrix.mean(axis=0)
         cov_median = np.median(cov_matrix, axis=0)
+        cov_min = cov_matrix.min(axis=0)
+        cov_max = cov_matrix.max(axis=0)
 
         for e_idx, k in enumerate(edge_counts):
             all_new_rows.append([
