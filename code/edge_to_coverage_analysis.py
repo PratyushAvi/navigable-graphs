@@ -8,8 +8,8 @@ import argparse
 
 
 COLUMNS = ['dataset', 'metric', 'method', 'dimensions', 'sources', 'total points',
-           'edges', 'mean coverage', 'median coverage',
-           'min coverage', 'max coverage']
+           'edges', 'mean points covered', 'median points covered',
+           'min points covered', 'max points covered']
 
 
 def main():
@@ -104,7 +104,7 @@ def main():
         n_nodes = args.total_points
         print(f"\nProcessing {dataset_name}-{metric} [{method}] ({n_nodes} nodes)")
 
-        # Per source, store its coverage-by-edge curve (length = its degree).
+        # Per source, store its points-covered-by-edge curve (length = its degree).
         # We can't fix the reported edge counts until we've seen every source,
         # since --max-edges may default to the largest out-degree in the file.
         per_source_cov = []  # list of 1-D float arrays, cov_by_edge[j] for j<deg
@@ -153,15 +153,16 @@ def main():
 
                 counter += 1
 
-                # coverage after including the first k edges is
-                # (n_nodes - uncov_after_k) / n_nodes * 100, where uncov_after_k
-                # is the uncov value recorded on the k-th edge (edges are stored
-                # in insertion order, so uncov is non-increasing along the list).
-                # cov_by_edge[j] = coverage using the first (j+1) edges.
+                # points covered after including the first k edges is
+                # n_nodes - uncov_after_k, where uncov_after_k is the uncov value
+                # recorded on the k-th edge (edges are stored in insertion order,
+                # so uncov is non-increasing along the list). Kept as exact
+                # integers to avoid the rounding that percentages suffer at large
+                # n_nodes. cov_by_edge[j] = points covered using the first (j+1) edges.
                 deg = len(neighborhood)
-                cov_by_edge = np.empty(deg, dtype=np.float64)
+                cov_by_edge = np.empty(deg, dtype=np.int64)
                 for j, (neighbor, uncov) in enumerate(neighborhood):
-                    cov_by_edge[j] = (n_nodes - uncov) / n_nodes * 100.0
+                    cov_by_edge[j] = n_nodes - uncov
 
                 per_source_cov.append(cov_by_edge)
                 if deg > max_deg:
@@ -182,22 +183,22 @@ def main():
             continue
         n_e = len(edge_counts)
 
-        # Build the (counter, n_e) coverage matrix. If a source has degree
+        # Build the (counter, n_e) points-covered matrix. If a source has degree
         # d < k, using k edges is the same as using all d edges: its coverage
-        # saturates at its final value (100% when it fully covers). So a source
-        # of degree d contributes its degree-d coverage to every edge count >= d.
+        # saturates at its final value (n_nodes when it fully covers). So a source
+        # of degree d contributes its degree-d points covered to every edge count >= d.
         edge_idx = np.array(edge_counts) - 1  # 0-based positions to sample
-        cov_matrix = np.empty((counter, n_e), dtype=np.float64)
+        cov_matrix = np.empty((counter, n_e), dtype=np.int64)
         for i, cov_by_edge in enumerate(per_source_cov):
             deg = len(cov_by_edge)
             if deg == 0:
-                cov_matrix[i, :] = 0.0
+                cov_matrix[i, :] = 0
             else:
                 # clamp requested edge index to this source's last edge (deg-1)
                 cov_matrix[i, :] = cov_by_edge[np.minimum(edge_idx, deg - 1)]
 
-        cov_mean = cov_matrix.mean(axis=0)
-        cov_median = np.median(cov_matrix, axis=0)
+        cov_mean = cov_matrix.mean(axis=0)            # fractional: average of counts
+        cov_median = np.median(cov_matrix, axis=0)    # may be x.5 for even counts
         cov_min = cov_matrix.min(axis=0)
         cov_max = cov_matrix.max(axis=0)
 
@@ -211,12 +212,12 @@ def main():
                 n_nodes,
                 k,
                 float(np.round(cov_mean[e_idx], 4)),
-                float(np.round(cov_median[e_idx], 4)),
-                float(np.round(cov_min[e_idx], 4)),
-                float(np.round(cov_max[e_idx], 4)),
+                float(cov_median[e_idx]),
+                int(cov_min[e_idx]),
+                int(cov_max[e_idx]),
             ])
 
-        print(f"  Computed coverage for {n_e} edge counts")
+        print(f"  Computed points covered for {n_e} edge counts")
 
     # --- Save to CSV (one file per dataset) ---
     new_df = pd.DataFrame(all_new_rows, columns=COLUMNS)
