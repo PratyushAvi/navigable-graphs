@@ -122,8 +122,11 @@ def main():
         print(f"\nProcessing {dataset_name}-{metric} [{method}] ({n_nodes} nodes)")
 
         # uncov_left threshold for each coverage level (non-increasing)
-        # coverage c% is achieved when uncov_left <= (1 - c/100) * n_nodes
-        thresholds = [(1.0 - c / 100.0) * n_nodes for c in coverages]
+        # coverage c% is achieved when uncov_left <= (1 - c/100) * n_nodes.
+        # Nudge up by 1e-6 so a source sitting exactly on a boundary (integer
+        # uncov == threshold) isn't pushed to the next edge by float rounding of
+        # (1 - c/100) * n_nodes (e.g. 80% of 10 evaluates to 1.9999999999999996).
+        thresholds = [(1.0 - c / 100.0) * n_nodes + 1e-6 for c in coverages]
 
         # out_deg_per_source[i] = list of n_cov ints: edges needed by source i at each coverage level
         out_deg_per_source = []

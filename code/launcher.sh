@@ -37,13 +37,53 @@ python updated_analysis.py \
     --total-points 1000000000 \
     --dimensions 256
 
-python edge_to_coverage_analysis.py \
-    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-bigann.txt \
-    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/bigann-computed.txt \
-    --dataset bigann \
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-spacev1b-euclidean.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/spacev1b-euclidean-computed.txt \
+    --dataset spacev1b \
     --metric euclidean \
-    --total-points 1000000000 \
-    --dimensions 128
+    --total-points 1402020720 \
+    --dimensions 100
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-mnist-euclidean.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/mnist-euclidean-computed.txt \
+    --dataset mnist \
+    --metric euclidean \
+    --total-points 60000 \
+    --dimensions 784
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-fashion_mnist-euclidean.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/fashion_mnist-euclidean-computed.txt \
+    --dataset fashion_mnist \
+    --metric euclidean \
+    --total-points 60000 \
+    --dimensions 784
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-coco_i2i-euclidean.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/coco_i2i-euclidean-computed.txt \
+    --dataset coco_i2i \
+    --metric euclidean \
+    --total-points 113287 \
+    --dimensions 512
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-coco_i2i-euclidean.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/coco_i2i-euclidean-computed.txt \
+    --dataset coco_i2i \
+    --metric euclidean \
+    --total-points 113287 \
+    --dimensions 512
+
+python updated_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-glove25-euclidean.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/glove25-euclidean-computed.txt \
+    --dataset glove25 \
+    --metric euclidean \
+    --total-points 1183514 \
+    --dimensions 25
 
 python edge_to_coverage_analysis.py \
     --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-bigann.txt \
@@ -52,7 +92,6 @@ python edge_to_coverage_analysis.py \
     --metric euclidean \
     --total-points 1000000000 \
     --dimensions 128
-
 
 python edge_to_coverage_analysis.py \
     --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-yandex_deep.txt \
