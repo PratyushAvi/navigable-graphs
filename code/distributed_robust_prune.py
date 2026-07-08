@@ -135,6 +135,10 @@ class Coordinator:
         while self.active:
             compute_distances = []
             message           = []
+            # neighbor chosen for each vec_id this round; its (neighbor, uncov)
+            # tuple is recorded after sendMessages refreshes uncov_current, so
+            # the stored uncov reflects the edge *after* it takes effect.
+            edge_this_round = {}
 
             for vec_id in list(self.active):
                 if vec_id not in responses or responses[vec_id] is None:
@@ -156,9 +160,7 @@ class Coordinator:
                         self.point_state[new_vec]   = 'INIT'
                 else:
                     _, neighbor = responses[vec_id]
-
-                    # the neighborhood is a tuple of (neighbor, points uncovered)
-                    self.neighborhoods[vec_id].append((neighbor, self.uncov_current[vec_id]))
+                    edge_this_round[vec_id] = neighbor
                     message.append((vec_id, 'UPDATE', neighbor))
                     compute_distances.append(neighbor)
                     self.point_state[vec_id] = 'UPDATE'
@@ -171,6 +173,12 @@ class Coordinator:
                 if vec_id not in self.uncov_initial:
                     self.uncov_initial[vec_id] = count
                 self.uncov_current[vec_id] = count
+
+            # Now uncov_current reflects this round's edges. Record each edge with
+            # the uncov *after* it took effect (the neighborhood is a tuple of
+            # (neighbor, points uncovered)).
+            for vec_id, neighbor in edge_this_round.items():
+                self.neighborhoods[vec_id].append((neighbor, self.uncov_current[vec_id]))
 
             self._print_round()
 

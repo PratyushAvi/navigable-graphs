@@ -153,12 +153,14 @@ def main():
 
                 counter += 1
 
-                # points covered after including the first k edges is
-                # n_nodes - uncov_after_k, where uncov_after_k is the uncov value
-                # recorded on the k-th edge (edges are stored in insertion order,
-                # so uncov is non-increasing along the list). Kept as exact
-                # integers to avoid the rounding that percentages suffer at large
-                # n_nodes. cov_by_edge[j] = points covered using the first (j+1) edges.
+                # Each adj-list tuple is (edge, uncov_after_edge): the uncov count
+                # after that edge takes effect. So points covered after including
+                # the first k edges is n_nodes - uncov recorded on the k-th edge.
+                # (Older files predating this convention store the pre-edge uncov;
+                # run fix_adj_list_uncov.py to migrate them first.) Edges are in
+                # insertion order, so uncov is non-increasing along the list. Kept
+                # as exact integers to avoid rounding at large n_nodes.
+                # cov_by_edge[j] = points covered using the first (j+1) edges.
                 deg = len(neighborhood)
                 cov_by_edge = np.empty(deg, dtype=np.int64)
                 for j, (neighbor, uncov) in enumerate(neighborhood):

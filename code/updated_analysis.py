@@ -177,6 +177,11 @@ def main():
                 # Before the while loop each iteration, cov_ptr is the first coverage
                 # level not yet satisfied, so the current edge is included at all
                 # levels c_idx >= cov_ptr (they still need more edges).
+                #
+                # uncov on tuple edge_idx is the uncov *after* that edge takes
+                # effect (see fix_adj_list_uncov.py / distributed_robust_prune.py).
+                # So uncov <= threshold at edge_idx means edges 0..edge_idx, i.e.
+                # edge_idx + 1 edges, achieve that coverage level.
                 out_deg_c = [len(neighborhood)] * n_cov
                 cov_ptr = 0
                 for edge_idx, (neighbor, uncov) in enumerate(neighborhood):
