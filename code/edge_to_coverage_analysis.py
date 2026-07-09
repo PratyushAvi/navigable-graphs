@@ -9,7 +9,8 @@ import argparse
 
 COLUMNS = ['dataset', 'metric', 'method', 'dimensions', 'sources', 'total points',
            'edges', 'mean points covered', 'median points covered',
-           'min points covered', 'max points covered']
+           'min points covered', 'max points covered',
+           'sources below 99.5% coverage', 'sources below 100% coverage']
 
 
 def main():
@@ -204,6 +205,14 @@ def main():
         cov_min = cov_matrix.min(axis=0)
         cov_max = cov_matrix.max(axis=0)
 
+        # Per edge count, how many sources have NOT yet reached the given coverage
+        # level (i.e. covered fewer points than the threshold). 99.5% uses a floor
+        # so a source exactly at the boundary counts as covered; 100% is exact
+        # (covered < n_nodes means still incomplete).
+        thresh_995 = 0.995 * n_nodes
+        n_below_995 = (cov_matrix < thresh_995).sum(axis=0)
+        n_below_100 = (cov_matrix < n_nodes).sum(axis=0)
+
         for e_idx, k in enumerate(edge_counts):
             all_new_rows.append([
                 dataset_name,
@@ -217,6 +226,8 @@ def main():
                 float(cov_median[e_idx]),
                 int(cov_min[e_idx]),
                 int(cov_max[e_idx]),
+                int(n_below_995[e_idx]),
+                int(n_below_100[e_idx]),
             ])
 
         print(f"  Computed points covered for {n_e} edge counts")
