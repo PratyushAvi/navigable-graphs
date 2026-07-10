@@ -136,3 +136,27 @@ python extract_max_degree_curve.py \
     --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-spacev1b-euclidean.txt \
     --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/spacev1b-euclidean-computed.txt \
     --total-points 1402020720 
+
+python diagnose_coverage_drop.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-bigann.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/bigann-computed.txt \
+    --total-points 1000000000 \
+    --out /scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage/diag_bigann
+
+python diagnose_coverage_drop.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-yandex_deep.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/yandex_deep-computed.txt \
+    --total-points 1000000000 \
+    --out /scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage/diag_yandex_deep
+
+python diagnose_coverage_drop.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-facebook_sim_searchnet++.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/facebook_sim_searchnet++-computed.txt \
+    --total-points 1000000000 \
+    --out /scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage/diag_facebook_sim_searchnet++
+
+python diagnose_coverage_drop.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-spacev1b-euclidean.txt \
+    --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/spacev1b-euclidean-computed.txt \
+    --total-points 1402020720 \
+    --out /scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage/diag_spacev1b
