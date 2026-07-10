@@ -164,5 +164,11 @@ python diagnose_coverage_drop.py \
 python buildgraphs.py \
     --dataset /scratch/pa2439/ANN-Search/datasets/mnist-784-euclidean.hdf5 \
     --gamma 0.99 \
-    --deleta 0.01 \
+    --delta 0.01 \
+    --output /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/mnist_99p.csv
+
+python buildgraphs.py \
+    --dataset /scratch/pa2439/ANN-Search/datasets/mnist-784-euclidean.hdf5 \
+    --gamma 0.99 \
+    --delta 0.01 \
     --output /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/mnist_99p.csv

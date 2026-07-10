@@ -76,7 +76,7 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None, progress=True)
         progress: show a tqdm progress bar tracking settled points (default True).
 
     Returns:
-        E: set of directed edges (v, u), meaning an out-edge from v to u.
+        adj: list of length n; adj[v] is an int32 ndarray of v's out-neighbours.
     """
     if not (0.0 <= gamma < 1.0):
         raise ValueError(f"gamma must be in [0, 1); got {gamma}")
@@ -89,13 +89,18 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None, progress=True)
         rng = np.random.default_rng()
 
     # Line 1: initialisation.
-    E = set()
+    # Store adjacency directly (adj[v] = out-neighbour int32 array) rather than a
+    # global set of (v, u) tuples: at high gamma each subset is a near-clique of
+    # size ceil(4/(1-gamma)), so a Python set of int-tuples costs ~100 B/edge and
+    # OOMs (e.g. glove25 at gamma=0.99 -> ~470M edges -> ~50 GB). int32 arrays are
+    # ~4 B/edge, ~25x smaller.
+    adj = [None] * n
     Pi = np.arange(n, dtype=np.int64)                       # Pi^(0) = P
     subset_size = math.ceil(4.0 / (1.0 - gamma))            # ceil(4/(1-gamma))
     w = int(math.ceil(16.0 * math.log(n / delta) / (1.0 - gamma)))  # witnesses
     claim_threshold = (1.0 - gamma) * w / 2.0               # (1-gamma) w / 2
 
-    all_points = np.arange(n, dtype=np.int64)
+    all_points = np.arange(n, dtype=np.int32)
 
     # Progress tracks how many points have left Pi (settled or connect-to-all),
     # counting up to n. Postfix shows the round index and the remaining |Pi|.
@@ -114,7 +119,7 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None, progress=True)
         S_bar = Pi[split:]                                  # leftovers
 
         # Line 4: leftovers carry forward to the next round.
-        next_Pi = [S_bar]
+        deferred = [S_bar]
 
         # Line 5: draw w witnesses uniformly at random from P (with replacement).
         W = rng.integers(0, n, size=w, dtype=np.int64)
@@ -131,17 +136,17 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None, progress=True)
             # |U_hat_{S_j, v}| = number of witnesses whose nearest S_j point is v.
             claims = np.bincount(nearest_in_S, minlength=len(S_j))  # (subset_size,)
 
-            for local_v, v in enumerate(S_j):
-                if claims[local_v] <= claim_threshold:
-                    # Line 10: v is settled -> out-edge to every u in S_j.
-                    for u in S_j:
-                        if u != v:
-                            E.add((int(v), int(u)))
-                else:
-                    # Line 12: defer v to the next round.
-                    next_Pi.append(np.array([v], dtype=np.int64))
+            settled = claims <= claim_threshold             # (subset_size,) bool
+            S_j32 = S_j.astype(np.int32)
+            for local_v in np.flatnonzero(settled):
+                # Line 10: v settled -> out-edge to every u in S_j except itself.
+                v = int(S_j[local_v])
+                adj[v] = np.delete(S_j32, local_v)
+            # Line 12: defer the rest to the next round.
+            if not settled.all():
+                deferred.append(S_j[~settled])
 
-        Pi = np.concatenate(next_Pi) if next_Pi else np.empty(0, dtype=np.int64)
+        Pi = np.concatenate(deferred) if deferred else np.empty(0, dtype=np.int64)
 
         # This round settled (prev_pi - len(Pi)) points.
         pbar.update(prev_pi - len(Pi))
@@ -150,32 +155,26 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None, progress=True)
 
     # Line 18: connect any remaining points to all of P.
     for v in Pi:
-        for u in all_points:
-            if u != v:
-                E.add((int(v), int(u)))
+        v = int(v)
+        adj[v] = all_points[all_points != v]
 
     # The remaining Pi points are now handled (connected to all of P).
     pbar.update(len(Pi))
     pbar.set_postfix(round=round_i, remaining=0)
     pbar.close()
 
-    # Line 19: return G = (P, E).
-    return E
+    # Any point never settled/connected (shouldn't happen) gets an empty list.
+    for v in range(n):
+        if adj[v] is None:
+            adj[v] = np.empty(0, dtype=np.int32)
+
+    # Line 19: return G = (P, E) as adjacency (adj[v] = out-neighbour array).
+    return adj
 
 
 # --------------------------------------------------------------------------- #
 # CLI / demo driver
 # --------------------------------------------------------------------------- #
-def _adjacency_from_edges(n, E):
-    """Convert an edge set into per-vertex out-neighbour lists."""
-    adj = [[] for _ in range(n)]
-    for v, u in E:
-        adj[v].append(u)
-    for lst in adj:
-        lst.sort()
-    return adj
-
-
 def save_adj_list(n, adj, path):
     """Write the graph as a plain adjacency list, one source per line:
 
@@ -207,7 +206,7 @@ def check_gamma_navigable(n, dmat, adj, gamma, eps=1e-9):
     per_source = np.empty(n)
     for s in range(n):
         nbrs = adj[s]
-        if not nbrs:
+        if len(nbrs) == 0:
             per_source[s] = 0.0
             continue
         # progress[u_idx, t] = neighbour u is strictly closer to t than s is
@@ -264,11 +263,11 @@ def main():
           f"(gamma={args.gamma}, delta={args.delta})")
 
     dmat = euclidean_pairwise(P)
-    E = build_almost_navigable_graph(n, dmat, args.gamma, args.delta, rng=rng)
+    adj = build_almost_navigable_graph(n, dmat, args.gamma, args.delta, rng=rng)
 
-    adj = _adjacency_from_edges(n, E)
     out_degrees = np.array([len(a) for a in adj])
-    print(f"Edges: {len(E)}  |  out-degree min/mean/max = "
+    n_edges = int(out_degrees.sum())
+    print(f"Edges: {n_edges}  |  out-degree min/mean/max = "
           f"{out_degrees.min()}/{out_degrees.mean():.1f}/{out_degrees.max()}")
 
     if args.verify:
