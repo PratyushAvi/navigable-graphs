@@ -20,6 +20,7 @@ import argparse
 
 import numpy as np
 import h5py
+from tqdm import tqdm
 
 
 # --------------------------------------------------------------------------- #
@@ -60,7 +61,7 @@ def euclidean_pairwise(P):
 # --------------------------------------------------------------------------- #
 # Algorithm 1
 # --------------------------------------------------------------------------- #
-def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None):
+def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None, progress=True):
     """Construct a gamma-navigable graph via Algorithm 1.
 
     Args:
@@ -72,6 +73,7 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None):
         gamma:  navigability slack, in [0, 1).
         delta:  failure probability, in (0, 1).
         rng:    optional numpy Generator for the random witness draws (line 5).
+        progress: show a tqdm progress bar tracking settled points (default True).
 
     Returns:
         E: set of directed edges (v, u), meaning an out-edge from v to u.
@@ -95,8 +97,15 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None):
 
     all_points = np.arange(n, dtype=np.int64)
 
+    # Progress tracks how many points have left Pi (settled or connect-to-all),
+    # counting up to n. Postfix shows the round index and the remaining |Pi|.
+    pbar = tqdm(total=n, desc="Settling points", unit="pt", disable=not progress)
+    round_i = 0
+
     # Line 2: iterate while Pi is still large enough to partition.
     while len(Pi) >= subset_size:
+        prev_pi = len(Pi)
+
         # Line 3: arbitrarily partition Pi into full subsets of size subset_size
         # plus a leftover set S_bar with < subset_size points.
         k = len(Pi) // subset_size
@@ -111,7 +120,8 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None):
         W = rng.integers(0, n, size=w, dtype=np.int64)
 
         # Lines 6-14: settle or defer each v in each subset.
-        for S_j in subsets:
+        for S_j in tqdm(subsets, desc=f"round {round_i} subsets", leave=False,
+                        disable=not progress):
             # For every witness p in W, find its nearest point within S_j
             # (line 8 defines U_hat as this Voronoi-in-S_j assignment).
             #   d_ws[p_idx, s_idx] = d(W[p_idx], S_j[s_idx])
@@ -133,11 +143,21 @@ def build_almost_navigable_graph(n, dmat, gamma, delta, rng=None):
 
         Pi = np.concatenate(next_Pi) if next_Pi else np.empty(0, dtype=np.int64)
 
+        # This round settled (prev_pi - len(Pi)) points.
+        pbar.update(prev_pi - len(Pi))
+        round_i += 1
+        pbar.set_postfix(round=round_i, remaining=len(Pi))
+
     # Line 18: connect any remaining points to all of P.
     for v in Pi:
         for u in all_points:
             if u != v:
                 E.add((int(v), int(u)))
+
+    # The remaining Pi points are now handled (connected to all of P).
+    pbar.update(len(Pi))
+    pbar.set_postfix(round=round_i, remaining=0)
+    pbar.close()
 
     # Line 19: return G = (P, E).
     return E

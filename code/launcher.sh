@@ -160,3 +160,9 @@ python diagnose_coverage_drop.py \
     --computed /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/spacev1b-euclidean-computed.txt \
     --total-points 1402020720 \
     --out /scratch/pa2439/ANN-Search/navigable_graph_results/edge_to_coverage/diag_spacev1b
+
+python buildgraphs.py \
+    --dataset /scratch/pa2439/ANN-Search/datasets/mnist-784-euclidean.hdf5 \
+    --gamma 0.99 \
+    --deleta 0.01 \
+    --output /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/mnist_99p.csv
