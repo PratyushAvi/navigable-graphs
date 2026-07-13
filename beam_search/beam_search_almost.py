@@ -117,7 +117,8 @@ def main():
 
     def run_search(query_vectors, query_indices=None):
         stats = {(bw, k): collections.defaultdict(list) for bw in beam_widths for k in RECALL_KS}
-        for i, qvec in enumerate(tqdm(query_vectors)):
+        for i, qvec in enumerate(tqdm(query_vectors, desc="Beam search queries",
+                                      unit="query")):
             d_q      = cdist(qvec[np.newaxis], X, metric='sqeuclidean').ravel()
             sorted_idx = np.argsort(d_q)
             q_id     = query_indices[i] if query_indices is not None else i

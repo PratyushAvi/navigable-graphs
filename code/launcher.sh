@@ -168,7 +168,31 @@ python buildgraphs.py \
     --output /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/mnist_99p.csv
 
 python buildgraphs.py \
-    --dataset /scratch/pa2439/ANN-Search/datasets/mnist-784-euclidean.hdf5 \
+    --dataset /scratch/pa2439/ANN-Search/datasets/glove25-25-angular.hdf5 \
     --gamma 0.99 \
     --delta 0.01 \
-    --output /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/mnist_99p.csv
+    --output /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/glove25_99p.csv
+
+python buildgraphs.py \
+    --dataset /scratch/pa2439/ANN-Search/datasets/coco_i2i-512-angular.hdf5 \
+    --gamma 0.99 \
+    --delta 0.01 \
+    --output /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/coco_i2i_99p.csv
+
+python beam_search_almost.py \
+  --adj_list  /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/glove25_99p.csv \
+  --dataset   /scratch/pa2439/ANN-Search/datasets/glove25-25-angular.hdf5 \
+  --save_path /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/beam_results \
+  --beam_widths 1 2 4 8 16 32 64 100 128 256 --tests 1000
+
+python beam_search_almost.py \
+  --adj_list  /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/mnist_99p.csv \
+  --dataset   /scratch/pa2439/ANN-Search/datasets/mnist-784-euclidean.hdf5 \
+  --save_path /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/beam_results \
+  --beam_widths 1 2 4 8 16 32 64 100 128 256 --tests 1000
+
+  python beam_search_almost.py \
+  --adj_list  /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/results/coco_i2i_99p.csv \
+  --dataset   /scratch/pa2439/ANN-Search/datasets/coco_i2i-512-angular.hdf5 \
+  --save_path /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/beam_results \
+  --beam_widths 1 2 4 8 16 32 64 100 128 256 --tests 1000
