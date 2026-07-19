@@ -11,15 +11,26 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", required=True, help="Path to dataset directory")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--data", help="Path to dataset directory holding vectors.npy, ids.npy, sq_norms.npy")
+    source.add_argument("--hdf5", help="Path to an HDF5 dataset file (alternative to --data)")
+    parser.add_argument("--hdf5_key", default="train", help="Key inside the HDF5 file (default: train)")
     parser.add_argument("--save_path", required=True, help="Path to save results")
     parser.add_argument("--dataset", required=True, help="Dataset name, used for output/checkpoint filenames")
-    parser.add_argument("--num_points", type=int, default=10_000)
+    parser.add_argument("--num_points", type=int, default=10_000,
+                        help="Number of neighborhoods to compute (0 = all points in dataset)")
     parser.add_argument("--batch", type=int, default=50)
     parser.add_argument("--num_shards", type=int, default=17)
     parser.add_argument("--cpus", type=int, default=16)
     parser.add_argument("--coordinator_cpus", type=int, default=1)
     args = parser.parse_args()
+
+    source_spec = VectorSource(args.data, args.hdf5, args.hdf5_key)
+
+    # num_points == 0 means "the whole dataset"
+    if args.num_points == 0:
+        args.num_points = source_spec.total()
+        print(f"num_points set to full dataset size: {args.num_points:,}", flush=True)
 
     ray.init(address="auto", runtime_env={"env_vars": {"OMP_NUM_THREADS": str(args.cpus), "OPENBLAS_NUM_THREADS": str(args.cpus)}})
 
@@ -34,7 +45,7 @@ def main():
     print("All workers ready.", flush=True)
 
     print(f"Creating {args.num_shards} worker actors...", flush=True)
-    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, args.data, args.num_shards, args.cpus)
+    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, source_spec, args.num_shards, args.cpus)
                for i in range(args.num_shards)]
 
     pending = {w.ready.remote(): i for i, w in enumerate(workers)}
@@ -50,7 +61,7 @@ def main():
 
     print("Creating coordinator actor...", flush=True)
     coordinator = CoordinatorActor.options(num_cpus=args.coordinator_cpus).remote(
-        EFS_PATH=args.data,
+        source=source_spec,
         SAVE_PATH=args.save_path,
         dataset=args.dataset,
         num_points=args.num_points,
@@ -65,13 +76,95 @@ def main():
 
 
 # ---------------------------------------------------------------------------
+# Vector source
+# ---------------------------------------------------------------------------
+
+class VectorSource:
+    """Describes where vectors come from, abstracting .npy-directory vs HDF5.
+
+    Holds only paths, so it pickles cleanly and each Ray actor opens its own
+    handles. The two backends differ in three ways:
+      - .npy has explicit ids.npy; HDF5 ids are implicit 0..total-1
+      - .npy has precomputed sq_norms.npy; HDF5 norms are computed on load
+      - h5py fancy indexing needs sorted, duplicate-free indices (see fetch)
+    """
+
+    def __init__(self, data_dir=None, hdf5_path=None, hdf5_key="train"):
+        self.data_dir  = data_dir
+        self.hdf5_path = hdf5_path
+        self.hdf5_key  = hdf5_key
+        self.is_hdf5   = hdf5_path is not None
+
+    def shape(self):
+        if self.is_hdf5:
+            import h5py
+            with h5py.File(self.hdf5_path, 'r') as f:
+                total, dim = f[self.hdf5_key].shape
+            return int(total), int(dim)
+        vshape = np.load(f"{self.data_dir}/vectors.npy", mmap_mode='r').shape
+        return int(vshape[0]), int(vshape[1])
+
+    def total(self):
+        return self.shape()[0]
+
+    def open_reader(self):
+        """Return a _Reader for random access to individual vectors (coordinator)."""
+        return _Hdf5Reader(self) if self.is_hdf5 else _NpyReader(self)
+
+    def load_shard(self, start, end, dim):
+        """Return (vectors, sq_norms) for rows [start, end) as float32."""
+        if self.is_hdf5:
+            import h5py
+            with h5py.File(self.hdf5_path, 'r') as f:
+                vecs = f[self.hdf5_key][start:end].astype(np.float32)
+            # No precomputed norms in HDF5 — derive them from the shard itself.
+            return vecs, np.einsum('ij,ij->i', vecs, vecs)
+        dataset = np.load(f"{self.data_dir}/vectors.npy",  mmap_mode='r')
+        norms   = np.load(f"{self.data_dir}/sq_norms.npy", mmap_mode='r')
+        return dataset[start:end], norms[start:end]
+
+
+class _NpyReader:
+    def __init__(self, source):
+        self.vector_ids = np.load(f"{source.data_dir}/ids.npy",      mmap_mode='r')
+        self.vectors    = np.load(f"{source.data_dir}/vectors.npy",  mmap_mode='r')
+        self.norms      = np.load(f"{source.data_dir}/sq_norms.npy", mmap_mode='r')
+        self.dim        = self.vectors.shape[1]
+
+    def fetch(self, indices):
+        vecs   = self.vectors[indices].astype(np.float32)
+        norms_ = self.norms[indices].astype(np.float32)
+        return vecs, norms_
+
+
+class _Hdf5Reader:
+    def __init__(self, source):
+        import h5py
+        self._file      = h5py.File(source.hdf5_path, 'r')
+        self.h5_dataset = self._file[source.hdf5_key]
+        total, dim      = self.h5_dataset.shape
+        self.dim        = int(dim)
+        # IDs are implicit for HDF5 inputs.
+        self.vector_ids = np.arange(total, dtype=np.int64)
+
+    def fetch(self, indices):
+        # h5py fancy indexing requires strictly increasing indices with no
+        # duplicates. np.unique returns sorted uniques; inverse restores the
+        # caller's original order (and re-expands any duplicates).
+        idx = np.asarray(indices, dtype=np.int64)
+        unique_idx, inverse = np.unique(idx, return_inverse=True)
+        vecs = self.h5_dataset[unique_idx.tolist()].astype(np.float32)[inverse]
+        return vecs, np.einsum('ij,ij->i', vecs, vecs).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Coordinator
 # ---------------------------------------------------------------------------
 
 class Coordinator:
-    def __init__(self, EFS_PATH, SAVE_PATH, dataset, num_points, batch):
+    def __init__(self, source, SAVE_PATH, dataset, num_points, batch):
         os.environ["RAY_DEDUP_LOGS"] = "0"
-        self.EFS_PATH   = EFS_PATH
+        self.source     = source
         self.SAVE_PATH  = SAVE_PATH
         self.dataset    = dataset
         self.num_points = num_points
@@ -80,10 +173,9 @@ class Coordinator:
         self.computed_path = f"{self.SAVE_PATH}/{self.dataset}-computed.txt"
         self.adj_list_path = f"{self.SAVE_PATH}/adj-list-{self.dataset}.txt"
 
-        self.vector_ids = np.load(f"{self.EFS_PATH}/ids.npy",      mmap_mode='r')
-        self.vectors    = np.load(f"{self.EFS_PATH}/vectors.npy",   mmap_mode='r')
-        self.norms      = np.load(f"{self.EFS_PATH}/sq_norms.npy",  mmap_mode='r')
-        self.dim        = self.vectors.shape[1]
+        self.reader     = source.open_reader()
+        self.vector_ids = self.reader.vector_ids
+        self.dim        = self.reader.dim
 
         self.neighborhoods = {}
         self.active        = set()
@@ -219,8 +311,7 @@ class Coordinator:
 
     def sendMessages(self, compute_distances, message):
         if compute_distances:
-            vecs   = self.vectors[compute_distances].astype(np.float32)
-            norms_ = self.norms[compute_distances].astype(np.float32)
+            vecs, norms_ = self.reader.fetch(compute_distances)
         else:
             vecs   = np.empty((0, self.dim), dtype=np.float32)
             norms_ = np.empty((0,),          dtype=np.float32)
@@ -255,7 +346,7 @@ class Coordinator:
 # ---------------------------------------------------------------------------
 
 class Worker:
-    def __init__(self, shard_id, EFS_PATH, num_shards, cpus):
+    def __init__(self, shard_id, source, num_shards, cpus):
         import os
         from threadpoolctl import threadpool_limits, threadpool_info
         os.environ["OMP_NUM_THREADS"]      = str(cpus)
@@ -266,14 +357,13 @@ class Worker:
               f"os.cpu_count()={os.cpu_count()}  threadpool={info}", flush=True)
 
         import socket
-        self.id       = shard_id
-        self.EFS_PATH = EFS_PATH
+        self.id     = shard_id
+        self.source = source
         print(f"[Worker {shard_id}] init start  node={socket.gethostname()}", flush=True)
 
-        t0          = time.time()
-        vshape      = np.load(f"{self.EFS_PATH}/vectors.npy", mmap_mode='r').shape
-        total, dim  = vshape[0], vshape[1]
-        self.dim    = dim
+        t0         = time.time()
+        total, dim = source.shape()
+        self.dim   = dim
         print(f"[Worker {shard_id}] shape check: {time.time()-t0:.2f}s  total={total:,}  dim={dim}", flush=True)
 
         shard_size   = total // num_shards
@@ -281,22 +371,24 @@ class Worker:
         self.end     = total if shard_id == num_shards - 1 else (shard_id + 1) * shard_size
         print(f"[Worker {shard_id}] shard [{self.start:,}, {self.end:,})  n={self.end-self.start:,}", flush=True)
 
-        # Load shard slice into X then close mmaps
-        t1      = time.time()
-        dataset = np.load(f"{self.EFS_PATH}/vectors.npy",  mmap_mode='r')
-        norms   = np.load(f"{self.EFS_PATH}/sq_norms.npy", mmap_mode='r')
-        print(f"[Worker {shard_id}] mmap open: {time.time()-t1:.2f}s", flush=True)
+        # Build augmented matrix X of shape (n, dim+2):
+        #   X[i] = [v_i | 1 | ||v_i||^2]
+        # so that V @ X.T yields squared Euclidean distances via:
+        #   ||v - x||^2 = [-2v | ||v||^2 | 1] @ [x | 1 | ||x||^2]^T
+        t1           = time.time()
+        vecs, norms  = source.load_shard(self.start, self.end, dim)
+        print(f"[Worker {shard_id}] shard read: {time.time()-t1:.2f}s", flush=True)
 
         n      = self.end - self.start
         self.X = np.empty((n, dim + 2), dtype=np.float32)
         t2     = time.time()
-        self.X[:, :dim] = dataset[self.start:self.end]
+        self.X[:, :dim] = vecs
         print(f"[Worker {shard_id}] vectors loaded: {time.time()-t2:.2f}s", flush=True)
         t3     = time.time()
         self.X[:, dim]     = 1.0
-        self.X[:, dim + 1] = norms[self.start:self.end]
+        self.X[:, dim + 1] = norms
         print(f"[Worker {shard_id}] norms loaded: {time.time()-t3:.2f}s", flush=True)
-        del dataset, norms
+        del vecs, norms
         print(f"[Worker {shard_id}] init done: total={time.time()-t0:.2f}s", flush=True)
 
         self.n             = n
@@ -460,9 +552,9 @@ class WorkerActor(Worker):
 
 @ray.remote
 class CoordinatorActor(Coordinator):
-    def __init__(self, EFS_PATH, SAVE_PATH, dataset, num_points, batch, workers):
+    def __init__(self, source, SAVE_PATH, dataset, num_points, batch, workers):
         self.workers = workers
-        super().__init__(EFS_PATH, SAVE_PATH, dataset, num_points, batch)
+        super().__init__(source, SAVE_PATH, dataset, num_points, batch)
 
 
 if __name__ == '__main__':

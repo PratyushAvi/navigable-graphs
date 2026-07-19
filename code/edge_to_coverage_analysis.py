@@ -2,9 +2,13 @@ import ast
 import glob
 import numpy as np
 import pandas as pd
+import re
 from tqdm import tqdm
 import os
 import argparse
+
+# "<start>_<end>" source-range token written by simulrun.py --range
+RANGE_TOKEN = re.compile(r"\d+_\d+")
 
 
 COLUMNS = ['dataset', 'metric', 'method', 'dimensions', 'sources', 'total points',
@@ -83,7 +87,13 @@ def main():
         def parse_filename(file, method):
             stem = os.path.basename(file).replace(".txt", "")
             parts = stem.split("-")[4:] if method == 'set-cover' else stem.split("-")[2:]
-            return "-".join(parts[:-1]), parts[-1]
+            metric, name_parts = parts[-1], parts[:-1]
+            # simulrun.py --range tags partial runs as "<dataset>-<start>_<end>",
+            # e.g. adj-list-sift-1_100-euclidean.txt. Drop that token so every
+            # shard of a dataset aggregates under the one dataset name.
+            if len(name_parts) > 1 and RANGE_TOKEN.fullmatch(name_parts[-1]):
+                name_parts = name_parts[:-1]
+            return "-".join(name_parts), metric
 
         files_to_process = []
         for file, method in adjLists:

@@ -234,7 +234,8 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
     Returns:
         list of B neighborhoods; each neighborhood is a list of
         (neighbor_id: int, uncov_count: int) tuples, where uncov_count is the
-        size of the uncovered set at the moment that edge was chosen.
+        size of the uncovered set *after* that edge takes effect. So tuple j
+        reports what remains uncovered once the first j+1 edges are in place.
     """
     n, d = dataset.shape
     B = len(sources)
@@ -259,17 +260,10 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
         act_uncov = uncov_mask[act]                      # (k, n)
         act_dists = dists_matrix[act]                    # (k, n)
 
-        # Uncovered count before this edge is added
-        uncov_counts = cp.sum(act_uncov, axis=1).get()   # (k,) on CPU
-
         # Vectorized waypoint selection: argmin over uncovered points for all active sources
         masked = cp.where(act_uncov, act_dists, cp.inf)  # (k, n)
         waypoints = cp.argmin(masked, axis=1)             # (k,)
         waypoints_np = waypoints.get()
-
-        # Record (neighbor_id, uncov_count_when_chosen)
-        for li, gi in enumerate(active):
-            neighborhoods[gi].append((int(waypoints_np[li]), int(uncov_counts[li])))
 
         # Mark chosen waypoints as covered in the local copy
         act_uncov[cp.arange(len(active)), waypoints] = False
@@ -298,6 +292,16 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
 
         # Write modified rows back into uncov_mask
         uncov_mask[act] = act_uncov
+
+        # Record (neighbor_id, uncov_count) with the uncovered count *after* this
+        # edge takes effect — i.e. after both marking the waypoint covered and
+        # applying the pruning above. Consumers (coverage_to_degree_analysis.py,
+        # edge_to_coverage_analysis.py) read tuple j as "uncov remaining once the
+        # first j+1 edges are in place"; distributed_robust_prune.py defers its
+        # append for the same reason.
+        uncov_counts = cp.sum(act_uncov, axis=1).get()   # (k,) on CPU
+        for li, gi in enumerate(active):
+            neighborhoods[gi].append((int(waypoints_np[li]), int(uncov_counts[li])))
 
         # Drop sources whose uncovered set is now empty
         still_active = cp.any(act_uncov, axis=1).get()   # (k,) bool
@@ -361,13 +365,8 @@ def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_0
         act_uncov = uncov_mask[act]                      # (k, n) copy
         act_dists = dists_matrix[act]                    # (k, n) copy
 
-        uncov_counts = np.sum(act_uncov, axis=1)         # (k,)
-
         masked = np.where(act_uncov, act_dists, np.inf)  # (k, n)
         waypoints = np.argmin(masked, axis=1)             # (k,)
-
-        for li, gi in enumerate(active):
-            neighborhoods[gi].append((int(waypoints[li]), int(uncov_counts[li])))
 
         act_uncov[np.arange(len(active)), waypoints] = False
 
@@ -391,6 +390,11 @@ def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_0
                 act_uncov &= ~(D < act_dists)
 
         uncov_mask[act] = act_uncov
+
+        # uncov count *after* this edge takes effect — see the GPU variant.
+        uncov_counts = np.sum(act_uncov, axis=1)         # (k,)
+        for li, gi in enumerate(active):
+            neighborhoods[gi].append((int(waypoints[li]), int(uncov_counts[li])))
 
         still_active = np.any(act_uncov, axis=1)         # (k,) — already on CPU
         active = [gi for li, gi in enumerate(active) if still_active[li]]
