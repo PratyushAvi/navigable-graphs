@@ -15,4 +15,4 @@
 13,lastfm,64,angular,292385,/scratch/pa2439/ANN-Search/datasets/lastfm-64-angular.hdf5,0.142028388
 14,nytimes,256,angular,290000,/scratch/pa2439/ANN-Search/datasets/nytimes-256-angular.hdf5,0.315208288
 15,glove100,100,angular,1183514,/scratch/pa2439/ANN-Search/datasets/glove100-100-angular.hdf5,0.485413888
-16,bigann,128,euclidean,1000000000,,,
+16,bigann,128,euclidean,1000000000,,

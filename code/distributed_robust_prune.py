@@ -23,7 +23,19 @@ def main():
     parser.add_argument("--num_shards", type=int, default=17)
     parser.add_argument("--cpus", type=int, default=16)
     parser.add_argument("--coordinator_cpus", type=int, default=1)
+    parser.add_argument("--metric", default="euclidean",
+                        help="Metric label for output filenames, kept as the final '-' segment "
+                             "to match simulrun.py (default: euclidean). The prune itself is "
+                             "squared-Euclidean; this does not change the computation.")
+    parser.add_argument("--alpha", type=float, default=1.0,
+                        help="alpha-reachability parameter (>= 1). A point p counts as covered "
+                             "by edge (u, v) when d(v, p) < d(u, p) / alpha, so larger alpha "
+                             "requires more progress per edge and produces denser neighborhoods. "
+                             "alpha=1 (the default) is the standard coverage rule.")
     args = parser.parse_args()
+
+    if args.alpha < 1.0:
+        parser.error(f"--alpha must be >= 1, got {args.alpha}")
 
     source_spec = VectorSource(args.data, args.hdf5, args.hdf5_key)
 
@@ -45,7 +57,7 @@ def main():
     print("All workers ready.", flush=True)
 
     print(f"Creating {args.num_shards} worker actors...", flush=True)
-    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, source_spec, args.num_shards, args.cpus)
+    workers = [WorkerActor.options(num_cpus=args.cpus).remote(i, source_spec, args.num_shards, args.cpus, args.alpha)
                for i in range(args.num_shards)]
 
     pending = {w.ready.remote(): i for i, w in enumerate(workers)}
@@ -67,6 +79,8 @@ def main():
         num_points=args.num_points,
         batch=args.batch,
         workers=workers,
+        alpha=args.alpha,
+        metric=args.metric,
     )
     print("Waiting for coordinator to initialize...", flush=True)
     ray.get(coordinator.ready.remote())
@@ -162,16 +176,25 @@ class _Hdf5Reader:
 # ---------------------------------------------------------------------------
 
 class Coordinator:
-    def __init__(self, source, SAVE_PATH, dataset, num_points, batch):
+    def __init__(self, source, SAVE_PATH, dataset, num_points, batch, alpha=1.0,
+                 metric="euclidean"):
         os.environ["RAY_DEDUP_LOGS"] = "0"
         self.source     = source
         self.SAVE_PATH  = SAVE_PATH
         self.dataset    = dataset
         self.num_points = num_points
         self.batch      = batch
+        self.alpha      = alpha
+        self.metric     = metric
 
-        self.computed_path = f"{self.SAVE_PATH}/{self.dataset}-computed.txt"
-        self.adj_list_path = f"{self.SAVE_PATH}/adj-list-{self.dataset}.txt"
+        # Filenames match simulrun.py: "<dataset>-alpha<a>-<metric>". Each alpha
+        # builds a different graph so it always appears, including alpha=1, and
+        # '.' would break the '.txt' handling in the analysis scripts'
+        # parse_filename, so 1.2 -> "alpha1p2". The metric stays the final '-'
+        # segment, which is what parse_filename relies on.
+        tag = "-alpha" + f"{alpha:g}".replace('.', 'p') + f"-{metric}"
+        self.computed_path = f"{self.SAVE_PATH}/{self.dataset}{tag}-computed.txt"
+        self.adj_list_path = f"{self.SAVE_PATH}/adj-list-{self.dataset}{tag}.txt"
 
         self.reader     = source.open_reader()
         self.vector_ids = self.reader.vector_ids
@@ -192,6 +215,7 @@ class Coordinator:
                 for p in f.readlines():
                     self.computed.add(int(p.strip()))
 
+        print(f"alpha-reachability: alpha={alpha:g}  ->  {self.adj_list_path}", flush=True)
         print(f"Resuming from {len(self.computed)} already computed neighborhoods.", flush=True)
 
         need       = self.num_points - len(self.computed)
@@ -346,7 +370,7 @@ class Coordinator:
 # ---------------------------------------------------------------------------
 
 class Worker:
-    def __init__(self, shard_id, source, num_shards, cpus):
+    def __init__(self, shard_id, source, num_shards, cpus, alpha=1.0):
         import os
         from threadpoolctl import threadpool_limits, threadpool_info
         os.environ["OMP_NUM_THREADS"]      = str(cpus)
@@ -359,6 +383,12 @@ class Worker:
         import socket
         self.id     = shard_id
         self.source = source
+        # alpha-reachability: waypoint w covers p only when d(w, p) < d(source, p) / alpha.
+        # Distances here are squared euclidean, so the test scales by alpha^2.
+        # alpha = 1 reproduces the standard coverage rule.
+        if alpha < 1.0:
+            raise ValueError(f"alpha must be >= 1, got {alpha}")
+        self.alpha_sq = float(alpha) ** 2
         print(f"[Worker {shard_id}] init start  node={socket.gethostname()}", flush=True)
 
         t0         = time.time()
@@ -441,18 +471,21 @@ class Worker:
             ui  = self.uncov_indices[row]
             if len(ui) == 0:
                 continue
+            # Keep p uncovered unless the waypoint covers it. With alpha the covering
+            # test is d(w, p) * alpha < d(source, p), so p stays uncovered when
+            # d(source, p) <= d(w, p) * alpha_sq (squared distances throughout).
             if is_sparse:
                 # ui is a sorted subset of union; searchsorted maps ui -> positions in D
                 d_col_at_ui = D[col][np.searchsorted(union, ui)]
-                keep = self.dists_matrix[row][ui] <= d_col_at_ui
+                keep = self.dists_matrix[row][ui] <= d_col_at_ui * self.alpha_sq
                 ui   = ui[keep]
             elif len(ui) == self.n:
                 # ui == arange(n): avoid expensive fancy indexing, compare directly
-                keep = self.dists_matrix[row] <= D[col]
+                keep = self.dists_matrix[row] <= D[col] * self.alpha_sq
                 ui   = np.where(keep)[0].astype(np.int32)
             else:
                 d_col_at_ui = D[col][ui]
-                keep = self.dists_matrix[row][ui] <= d_col_at_ui
+                keep = self.dists_matrix[row][ui] <= d_col_at_ui * self.alpha_sq
                 ui   = ui[keep]
             # Explicitly remove the waypoint itself — the pruning condition
             # dist(source, w) <= dist(w, w)=0 is True when they are duplicates
@@ -552,9 +585,10 @@ class WorkerActor(Worker):
 
 @ray.remote
 class CoordinatorActor(Coordinator):
-    def __init__(self, source, SAVE_PATH, dataset, num_points, batch, workers):
+    def __init__(self, source, SAVE_PATH, dataset, num_points, batch, workers, alpha=1.0,
+                 metric="euclidean"):
         self.workers = workers
-        super().__init__(source, SAVE_PATH, dataset, num_points, batch)
+        super().__init__(source, SAVE_PATH, dataset, num_points, batch, alpha, metric)
 
 
 if __name__ == '__main__':
