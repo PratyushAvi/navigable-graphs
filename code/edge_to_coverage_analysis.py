@@ -9,9 +9,12 @@ import argparse
 
 # "<start>_<end>" source-range token written by simulrun.py --range
 RANGE_TOKEN = re.compile(r"\d+_\d+")
+# "alpha<value>" reachability token written by simulrun.py, with '.' encoded as 'p'
+# (e.g. alpha1p2 for alpha=1.2). Files predating the tag are reported as alpha 1.0.
+ALPHA_TOKEN = re.compile(r"alpha(\d+(?:p\d+)?)")
 
 
-COLUMNS = ['dataset', 'metric', 'method', 'dimensions', 'sources', 'total points',
+COLUMNS = ['dataset', 'metric', 'alpha', 'method', 'dimensions', 'sources', 'total points',
            'edges', 'mean points covered', 'median points covered',
            'min points covered', 'max points covered',
            'sources below 99.5% coverage', 'sources below 100% coverage']
@@ -35,6 +38,10 @@ def main():
                              '(default: empty).')
     parser.add_argument('--method', type=str, default='robust-prune', choices=['robust-prune', 'set-cover'],
                         help='Method label for the output when using --adj-list (default: robust-prune).')
+    parser.add_argument('--alpha', type=float, default=1.0,
+                        help='alpha-reachability label for --adj-list mode, recorded in the output only; '
+                             'has no effect on computation (default: 1.0). In scan mode alpha is read '
+                             'from the filename tag written by simulrun.py.')
     parser.add_argument('--min-edges', type=int, default=1,
                         help='Minimum number of edges to report coverage for (default: 1)')
     parser.add_argument('--max-edges', type=int, default=None,
@@ -70,7 +77,8 @@ def main():
         if args.computed is not None and not os.path.exists(args.computed):
             parser.error(f"--computed path does not exist: {args.computed}")
 
-        labels = {args.adj_list: (args.dataset, args.metric)}
+        # The tag is empty here: --computed supplies the path directly.
+        labels = {args.adj_list: (args.dataset, args.metric, args.alpha, "")}
 
         def parse_filename(file, method):
             return labels[file]
@@ -88,16 +96,27 @@ def main():
             stem = os.path.basename(file).replace(".txt", "")
             parts = stem.split("-")[4:] if method == 'set-cover' else stem.split("-")[2:]
             metric, name_parts = parts[-1], parts[:-1]
-            # simulrun.py --range tags partial runs as "<dataset>-<start>_<end>",
-            # e.g. adj-list-sift-1_100-euclidean.txt. Drop that token so every
-            # shard of a dataset aggregates under the one dataset name.
+            # simulrun.py tags runs as "<dataset>[-<start>_<end>][-alpha<a>]",
+            # e.g. adj-list-sift-1_100-alpha1p2-euclidean.txt. Both tokens come off
+            # the dataset name: alpha becomes its own column, and dropping the range
+            # lets every shard of a run aggregate under one name. `tag` keeps the
+            # alpha token verbatim so the matching computed-sources path can be
+            # rebuilt below (ranged runs keep the existing behaviour of falling back
+            # to no computed file, since the range is not carried here).
+            alpha, tag = 1.0, ""
+            if name_parts:
+                m = ALPHA_TOKEN.fullmatch(name_parts[-1])
+                if m:
+                    alpha = float(m.group(1).replace('p', '.'))
+                    tag = "-" + name_parts[-1]
+                    name_parts = name_parts[:-1]
             if len(name_parts) > 1 and RANGE_TOKEN.fullmatch(name_parts[-1]):
                 name_parts = name_parts[:-1]
-            return "-".join(name_parts), metric
+            return "-".join(name_parts), metric, alpha, tag
 
         files_to_process = []
         for file, method in adjLists:
-            dataset_name, metric = parse_filename(file, method)
+            dataset_name, _metric, _alpha, _tag = parse_filename(file, method)
             if args.dataset is not None and dataset_name != args.dataset:
                 continue
             files_to_process.append((file, method))
@@ -111,9 +130,9 @@ def main():
     all_new_rows = []
 
     for file, method in tqdm(files_to_process, desc="Processing adjacency lists"):
-        dataset_name, metric = parse_filename(file, method)
+        dataset_name, metric, alpha, tag = parse_filename(file, method)
         n_nodes = args.total_points
-        print(f"\nProcessing {dataset_name}-{metric} [{method}] ({n_nodes} nodes)")
+        print(f"\nProcessing {dataset_name}-{metric} [{method}, alpha={alpha:g}] ({n_nodes} nodes)")
 
         # Per source, store its points-covered-by-edge curve (length = its degree).
         # We can't fix the reported edge counts until we've seen every source,
@@ -131,7 +150,9 @@ def main():
         if args.adj_list is not None:
             computed_txt = args.computed
         elif method == 'robust-prune':
-            computed_txt = f"{SAVEPATH}/{dataset_name}-{metric}-computed.txt"
+            # tag restores the alpha token stripped off the dataset name above,
+            # since simulrun.py writes the computed file under the tagged name.
+            computed_txt = f"{SAVEPATH}/{dataset_name}{tag}-{metric}-computed.txt"
             computed_txt = computed_txt if os.path.exists(computed_txt) else None
         else:
             computed_txt = None
@@ -227,6 +248,7 @@ def main():
             all_new_rows.append([
                 dataset_name,
                 metric,
+                alpha,
                 method,
                 args.dimensions,
                 counter,

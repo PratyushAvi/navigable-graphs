@@ -62,6 +62,16 @@ def main():
              'Set OMP_NUM_THREADS / OPENBLAS_NUM_THREADS in your job script.'
     )
     parser.add_argument(
+        '--alpha',
+        type=float,
+        default=1.0,
+        help='alpha-reachability parameter (>= 1). A point p counts as covered by '
+             'edge (u, v) when d(v, p) < d(u, p) / alpha, so larger alpha requires '
+             'more progress per edge and produces denser neighborhoods. '
+             'alpha=1 (the default) is the standard coverage rule. '
+             'Euclidean metric only.'
+    )
+    parser.add_argument(
         '--range',
         type=str,
         default=None,
@@ -72,6 +82,8 @@ def main():
              'splits the work without changing the resulting graph.'
     )
     args = parser.parse_args()
+    if args.alpha < 1.0:
+        parser.error(f"--alpha must be >= 1, got {args.alpha}")
     DATASET = args.dataset # Get dataset name from argument
 
     print("Building graph on", DATASET)
@@ -91,6 +103,12 @@ def main():
         metric = DATASETS[DATASET]['metric']
     else:
         metric = args.metric
+
+    # alpha-reachability is only wired through the euclidean prune paths; the
+    # angular and jaccard ones still use the plain d(v,p) < d(u,p) rule, so fail
+    # loudly rather than silently ignoring the flag.
+    if args.alpha != 1.0 and metric != 'euclidean':
+        parser.error(f"--alpha is only supported for the euclidean metric, got {metric!r}")
 
     data = h5py.File(DATASETS[DATASET]['filepath'], 'r')['train']
 
@@ -121,6 +139,14 @@ def main():
     else:
         all_sources = np.arange(n_points)
         tag = ""
+
+    # Each alpha builds a different graph, so the alpha goes in the filename —
+    # always, including alpha=1, so every output records what produced it. Like
+    # the range tag it goes before the metric, keeping the metric as the final
+    # '-' segment for the analysis scripts' parse_filename. '.' would break the
+    # '.txt' handling there, so 1.2 is written "alpha1p2".
+    tag += "-alpha" + f"{args.alpha:g}".replace('.', 'p')
+    print(f"Using alpha-reachability with alpha={args.alpha:g}")
 
     adj_path      = f"{SAVEPATH}/adj-list-{DATASET}{tag}-{metric}.txt"
     computed_path = f"{SAVEPATH}/{DATASET}{tag}-{metric}-computed.txt"
@@ -154,7 +180,7 @@ def main():
         pbar = tqdm(total=len(sources_to_process))
         for i in range(0, len(sources_to_process), args.batch_size):
             batch = sources_to_process[i : i + args.batch_size]
-            neighborhoods = _prune(batch, dataset, X_aug)
+            neighborhoods = _prune(batch, dataset, X_aug, alpha=args.alpha)
 
             # Write entire batch at once; a crash loses at most batch_size sources of work.
             with open(adj_path, 'a') as adj, open(computed_path, 'a') as comp:

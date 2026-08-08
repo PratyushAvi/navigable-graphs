@@ -214,7 +214,8 @@ def _query_aug(vecs, d):
     return V
 
 
-def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_000):
+def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_000,
+                                alpha=1.0):
     """
     Compute navigable-graph neighborhoods for a batch of source nodes in parallel.
 
@@ -230,6 +231,12 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
         dataset:          cp.ndarray (n, d), float32, already on GPU.
         X_aug:            precomputeAugMatrix(dataset) result, shape (n, d+2).
         sparse_threshold: switch to sub-matmul when union of uncovered < this size.
+        alpha:            alpha-reachability parameter, >= 1. Waypoint w covers point p
+                          only when d(w, p) < d(source, p) / alpha, so larger alpha
+                          demands strictly more progress per edge and yields denser
+                          neighborhoods. alpha = 1 is the original coverage rule.
+                          Distances here are *squared* euclidean, so the comparison is
+                          applied as d2(w, p) < d2(source, p) / alpha^2.
 
     Returns:
         list of B neighborhoods; each neighborhood is a list of
@@ -237,9 +244,20 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
         size of the uncovered set *after* that edge takes effect. So tuple j
         reports what remains uncovered once the first j+1 edges are in place.
     """
+    if alpha < 1.0:
+        raise ValueError(f"alpha must be >= 1, got {alpha}")
+
     n, d = dataset.shape
     B = len(sources)
     sources_cp = cp.array(sources, dtype=cp.int64)
+
+    # Distances below are squared euclidean, so the alpha-reachability test
+    # d(w, p) < d(source, p) / alpha  becomes  d2(w, p) < d2(source, p) / alpha^2,
+    # applied as  d2(w, p) * alpha^2 < d2(source, p)  at each comparison. Prescaling
+    # dists_matrix by 1/alpha^2 instead would save the per-round multiply, but it
+    # shrinks every source distance toward zero in float32 and the distances that
+    # decide late rounds are already small, so the multiply stays on the fresh side.
+    alpha_sq = float(alpha) ** 2
 
     # INIT — one (B, n) matmul covers all sources at once
     sv = dataset[sources_cp].astype(cp.float32)         # (B, d)
@@ -281,14 +299,14 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
                 u_idx = cp.where(union_mask)[0]               # (u,)
                 D_sub = W_aug @ X_aug[u_idx].T                # (k, u)
                 cp.maximum(D_sub, 0.0, out=D_sub)
-                prune = D_sub < act_dists[:, u_idx]           # (k, u)
+                prune = D_sub * alpha_sq < act_dists[:, u_idx]  # (k, u)
                 sub   = act_uncov[:, u_idx]                   # (k, u) copy
                 act_uncov[:, u_idx] = sub & ~prune            # scatter back
             else:
                 # Dense: full matmul (union too large to gain from sparsity)
                 D = W_aug @ X_aug.T                           # (k, n)
                 cp.maximum(D, 0.0, out=D)
-                act_uncov &= ~(D < act_dists)
+                act_uncov &= ~(D * alpha_sq < act_dists)
 
         # Write modified rows back into uncov_mask
         uncov_mask[act] = act_uncov
@@ -334,7 +352,8 @@ def _query_aug_cpu(vecs, d):
     return V
 
 
-def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_000_000):
+def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_000_000,
+                                   alpha=1.0):
     """
     CPU counterpart of batchedEuclideanRobustPrune.
 
@@ -342,11 +361,18 @@ def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_0
     allocated cores automatically (controlled by OMP_NUM_THREADS /
     OPENBLAS_NUM_THREADS in the job script).  No .get() transfers needed.
 
-    Args / returns: identical to batchedEuclideanRobustPrune.
+    Args / returns: identical to batchedEuclideanRobustPrune, alpha included.
     """
+    if alpha < 1.0:
+        raise ValueError(f"alpha must be >= 1, got {alpha}")
+
     n, d = dataset.shape
     B = len(sources)
     sources_arr = np.array(sources, dtype=np.int64)
+
+    # Squared distances — see the GPU variant for why alpha^2 multiplies the
+    # waypoint side rather than dividing the source side.
+    alpha_sq = float(alpha) ** 2
 
     # INIT — one (B, n) BLAS matmul
     sv = dataset[sources_arr].astype(np.float32)         # (B, d)
@@ -381,13 +407,13 @@ def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_0
                 u_idx = np.where(union_mask)[0]               # (u,)
                 D_sub = W_aug @ X_aug[u_idx].T                # (k, u)
                 np.maximum(D_sub, 0.0, out=D_sub)
-                prune = D_sub < act_dists[:, u_idx]           # (k, u)
+                prune = D_sub * alpha_sq < act_dists[:, u_idx]  # (k, u)
                 sub   = act_uncov[:, u_idx]                   # (k, u) copy
                 act_uncov[:, u_idx] = sub & ~prune            # scatter back
             else:
                 D = W_aug @ X_aug.T                           # (k, n)
                 np.maximum(D, 0.0, out=D)
-                act_uncov &= ~(D < act_dists)
+                act_uncov &= ~(D * alpha_sq < act_dists)
 
         uncov_mask[act] = act_uncov
 
