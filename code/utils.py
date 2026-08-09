@@ -294,19 +294,21 @@ def batchedEuclideanRobustPrune(sources, dataset, X_aug, sparse_threshold=2_000_
             wp_vecs = dataset[waypoints].astype(cp.float32)   # (k, d)
             W_aug   = _query_aug(wp_vecs, d)                  # (k, d+2)
 
+            # alpha^2 scales the waypoint distances (see alpha_sq above). Folding it
+            # into the matmul result keeps act_dists at full float32 magnitude.
             if union_size < sparse_threshold:
                 # Sparse: matmul only against the uncovered subset of columns
                 u_idx = cp.where(union_mask)[0]               # (u,)
-                D_sub = W_aug @ X_aug[u_idx].T                # (k, u)
+                D_sub = alpha_sq * (W_aug @ X_aug[u_idx].T)   # (k, u)
                 cp.maximum(D_sub, 0.0, out=D_sub)
-                prune = D_sub * alpha_sq < act_dists[:, u_idx]  # (k, u)
+                prune = D_sub < act_dists[:, u_idx]           # (k, u)
                 sub   = act_uncov[:, u_idx]                   # (k, u) copy
                 act_uncov[:, u_idx] = sub & ~prune            # scatter back
             else:
                 # Dense: full matmul (union too large to gain from sparsity)
-                D = W_aug @ X_aug.T                           # (k, n)
+                D = alpha_sq * (W_aug @ X_aug.T)              # (k, n)
                 cp.maximum(D, 0.0, out=D)
-                act_uncov &= ~(D * alpha_sq < act_dists)
+                act_uncov &= ~(D < act_dists)
 
         # Write modified rows back into uncov_mask
         uncov_mask[act] = act_uncov
@@ -403,17 +405,18 @@ def batchedEuclideanRobustPruneCPU(sources, dataset, X_aug, sparse_threshold=2_0
             wp_vecs = dataset[waypoints].astype(np.float32)   # (k, d)
             W_aug   = _query_aug_cpu(wp_vecs, d)              # (k, d+2)
 
+            # alpha^2 folded into the matmul result — see the GPU variant.
             if union_size < sparse_threshold:
                 u_idx = np.where(union_mask)[0]               # (u,)
-                D_sub = W_aug @ X_aug[u_idx].T                # (k, u)
+                D_sub = alpha_sq * (W_aug @ X_aug[u_idx].T)   # (k, u)
                 np.maximum(D_sub, 0.0, out=D_sub)
-                prune = D_sub * alpha_sq < act_dists[:, u_idx]  # (k, u)
+                prune = D_sub < act_dists[:, u_idx]           # (k, u)
                 sub   = act_uncov[:, u_idx]                   # (k, u) copy
                 act_uncov[:, u_idx] = sub & ~prune            # scatter back
             else:
-                D = W_aug @ X_aug.T                           # (k, n)
+                D = alpha_sq * (W_aug @ X_aug.T)              # (k, n)
                 np.maximum(D, 0.0, out=D)
-                act_uncov &= ~(D * alpha_sq < act_dists)
+                act_uncov &= ~(D < act_dists)
 
         uncov_mask[act] = act_uncov
 

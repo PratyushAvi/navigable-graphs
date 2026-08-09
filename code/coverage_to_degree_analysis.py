@@ -10,11 +10,19 @@ from collections import defaultdict
 
 # "<start>_<end>" source-range token written by simulrun.py --range
 RANGE_TOKEN = re.compile(r"\d+_\d+")
+# "alpha<value>" reachability token written by simulrun.py, with '.' encoded as 'p'
+# (e.g. alpha1p2 for alpha=1.2). Files predating the tag are reported as alpha 1.0.
+ALPHA_TOKEN = re.compile(r"alpha(\d+(?:p\d+)?)")
 
 
-COLUMNS = ['dataset', 'metric', 'method', 'dimensions', 'points computed', 'total points', 'coverage',
+COLUMNS = ['dataset', 'metric', 'alpha', 'method', 'dimensions', 'points computed', 'total points', 'coverage',
            'mean out degree', 'median out degree', 'median in degree',
            'min out degree', 'max out degree', 'min in degree', 'max in degree']
+
+
+def alpha_slug(alpha):
+    """Filename-safe alpha label, mirroring simulrun.py's 'p' encoding (1.2 -> 1p2)."""
+    return f"{alpha:g}".replace('.', 'p')
 
 
 def main():
@@ -34,6 +42,10 @@ def main():
                              '(default: empty).')
     parser.add_argument('--method', type=str, default='robust-prune', choices=['robust-prune', 'set-cover'],
                         help='Method label for the output when using --adj-list (default: robust-prune).')
+    parser.add_argument('--alpha', type=float, default=1.0,
+                        help='alpha-reachability label for --adj-list mode; has no effect on computation '
+                             'but selects the output file (default: 1.0). In scan mode alpha is read '
+                             'from the filename tag written by simulrun.py.')
     parser.add_argument('--min-coverage', type=float, default=90.0,
                         help='Minimum coverage level in percent (default: 90.0)')
     parser.add_argument('--max-coverage', type=float, default=100.0,
@@ -57,16 +69,30 @@ def main():
     print(f"Coverage levels ({n_cov}): {coverages[0]}% to {coverages[-1]}% step {args.step_size}%")
 
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
-    stats_file = "/scratch/pa2439/ANN-Search/navigable_graph_results/coverage_stats.csv"
+    STATS_DIR = "/scratch/pa2439/ANN-Search/navigable_graph_results"
 
-    # Load existing stats (used for the merge at the end, and for skipping
-    # already-complete combos when scanning SAVEPATH).
-    if os.path.exists(stats_file):
-        existing_stats = pd.read_csv(stats_file)
-        if 'method' not in existing_stats.columns:
-            existing_stats['method'] = 'robust-prune'
-    else:
-        existing_stats = pd.DataFrame()
+    def stats_path(alpha):
+        """One CSV per alpha: every graph built with that alpha lands in this file."""
+        return os.path.join(STATS_DIR, f"coverage_stats_alpha{alpha_slug(alpha)}.csv")
+
+    # Existing stats are loaded per alpha (used for the merge at the end, and for
+    # skipping already-complete combos when scanning SAVEPATH), since each alpha
+    # now has its own file.
+    _stats_cache = {}
+
+    def load_existing(alpha):
+        if alpha not in _stats_cache:
+            path = stats_path(alpha)
+            if os.path.exists(path):
+                df = pd.read_csv(path)
+                if 'method' not in df.columns:
+                    df['method'] = 'robust-prune'
+                if 'alpha' not in df.columns:
+                    df['alpha'] = alpha
+            else:
+                df = pd.DataFrame()
+            _stats_cache[alpha] = df
+        return _stats_cache[alpha]
 
     if args.adj_list is not None:
         # Explicit single-file mode: caller supplies the file and its labels.
@@ -77,14 +103,15 @@ def main():
         if args.computed is not None and not os.path.exists(args.computed):
             parser.error(f"--computed path does not exist: {args.computed}")
 
-        labels = {args.adj_list: (args.dataset, args.metric)}
+        # The tag is empty here: --computed supplies the path directly.
+        labels = {args.adj_list: (args.dataset, args.metric, args.alpha, "")}
 
         def parse_filename(file, method):
             return labels[file]
 
         files_to_process = [(args.adj_list, args.method)]
         print(f"Processing single adjacency list: {args.adj_list} "
-              f"[{args.dataset}-{args.metric}, {args.method}]")
+              f"[{args.dataset}-{args.metric}, {args.method}, alpha={args.alpha:g}]")
     else:
         adjLists = (
             [(f, 'robust-prune') for f in glob.glob(f"{SAVEPATH}/adj-list-*.txt")] +
@@ -95,27 +122,43 @@ def main():
             stem = os.path.basename(file).replace(".txt", "")
             parts = stem.split("-")[4:] if method == 'set-cover' else stem.split("-")[2:]
             metric, name_parts = parts[-1], parts[:-1]
-            # simulrun.py --range tags partial runs as "<dataset>-<start>_<end>",
-            # e.g. adj-list-sift-1_100-euclidean.txt. Drop that token so every
-            # shard of a dataset aggregates under the one dataset name.
+            # simulrun.py tags runs as "<dataset>[-<start>_<end>][-alpha<a>]",
+            # e.g. adj-list-sift-1_100-alpha1p2-euclidean.txt. Both tokens come off
+            # the dataset name: alpha selects the output file, and dropping the range
+            # lets every shard of a run aggregate under one name. `tag` keeps the
+            # alpha token verbatim so the matching computed-sources path can be
+            # rebuilt below (ranged runs keep the existing behaviour of falling back
+            # to no computed file, since the range is not carried here).
+            alpha, tag = 1.0, ""
+            if name_parts:
+                m = ALPHA_TOKEN.fullmatch(name_parts[-1])
+                if m:
+                    alpha = float(m.group(1).replace('p', '.'))
+                    tag = "-" + name_parts[-1]
+                    name_parts = name_parts[:-1]
             if len(name_parts) > 1 and RANGE_TOKEN.fullmatch(name_parts[-1]):
                 name_parts = name_parts[:-1]
-            return "-".join(name_parts), metric
+            return "-".join(name_parts), metric, alpha, tag
 
-        # Determine which (dataset, metric, method) combos are already fully done
+        # Determine which (dataset, metric, method) combos are already fully done.
+        # Checked against that alpha's own file, so the same graph at a new alpha
+        # is never skipped because the old alpha was already computed.
+        cov_set_required = set(coverages)
         done_keys = set()
-        if not existing_stats.empty:
-            cov_set_required = set(coverages)
-            for key, grp in existing_stats.groupby(['dataset', 'metric', 'method']):
+        for alpha in {parse_filename(f, m)[2] for f, m in adjLists}:
+            existing = load_existing(alpha)
+            if existing.empty:
+                continue
+            for key, grp in existing.groupby(['dataset', 'metric', 'method']):
                 if cov_set_required.issubset(set(grp['coverage'])):
-                    done_keys.add(key)
+                    done_keys.add((alpha,) + key)
 
         files_to_process = []
         for file, method in adjLists:
-            dataset_name, metric = parse_filename(file, method)
+            dataset_name, metric, alpha, _tag = parse_filename(file, method)
             if args.dataset is not None and dataset_name != args.dataset:
                 continue
-            if (dataset_name, metric, method) not in done_keys:
+            if (alpha, dataset_name, metric, method) not in done_keys:
                 files_to_process.append((file, method))
 
         print(f"Found {len(files_to_process)} files to process out of {len(adjLists)} total")
@@ -127,9 +170,9 @@ def main():
     all_new_rows = []
 
     for file, method in tqdm(files_to_process, desc="Processing adjacency lists"):
-        dataset_name, metric = parse_filename(file, method)
+        dataset_name, metric, alpha, tag = parse_filename(file, method)
         n_nodes = args.total_points
-        print(f"\nProcessing {dataset_name}-{metric} [{method}] ({n_nodes} nodes)")
+        print(f"\nProcessing {dataset_name}-{metric} [{method}, alpha={alpha:g}] ({n_nodes} nodes)")
 
         # uncov_left threshold for each coverage level (non-increasing)
         # coverage c% is achieved when uncov_left <= (1 - c/100) * n_nodes.
@@ -153,7 +196,9 @@ def main():
         if args.adj_list is not None:
             computed_txt = args.computed
         elif method == 'robust-prune':
-            computed_txt = f"{SAVEPATH}/{dataset_name}-{metric}-computed.txt"
+            # tag restores the alpha token stripped off the dataset name above,
+            # since simulrun.py writes the computed file under the tagged name.
+            computed_txt = f"{SAVEPATH}/{dataset_name}{tag}-{metric}-computed.txt"
             computed_txt = computed_txt if os.path.exists(computed_txt) else None
         else:
             computed_txt = None
@@ -228,6 +273,7 @@ def main():
             all_new_rows.append([
                 dataset_name,
                 metric,
+                alpha,
                 method,
                 args.dimensions,
                 counter,
@@ -244,26 +290,33 @@ def main():
 
         print(f"  Computed stats for {n_cov} coverage levels")
 
-    # --- Save to CSV ---
+    # --- Save to CSV (one file per alpha) ---
     new_df = pd.DataFrame(all_new_rows, columns=COLUMNS)
 
-    if not existing_stats.empty and all_new_rows:
-        # Append new coverages, keeping all existing ones. Only overwrite an
-        # existing row when it has the same (dataset, metric, method, coverage)
-        # as a freshly computed row — those duplicates take the new values.
-        key_cols = ['dataset', 'metric', 'method', 'coverage']
-        new_keys = set(map(tuple, new_df[key_cols].itertuples(index=False, name=None)))
-        mask = existing_stats[key_cols].apply(
-            lambda row: tuple(row) in new_keys, axis=1
-        )
-        combined = pd.concat([existing_stats[~mask], new_df], ignore_index=True)
-    elif not existing_stats.empty:
-        combined = existing_stats
-    else:
-        combined = new_df
+    if new_df.empty:
+        print("\nNo new rows computed.")
+        return
 
-    combined.to_csv(stats_file, index=False)
-    print(f"\nSaved {len(new_df)} new rows → {stats_file} ({len(combined)} total rows)")
+    os.makedirs(STATS_DIR, exist_ok=True)
+    for alpha, grp in new_df.groupby('alpha'):
+        existing = load_existing(alpha)
+        if not existing.empty:
+            # Append new coverages, keeping all existing ones. Only overwrite an
+            # existing row when it has the same (dataset, metric, method, coverage)
+            # as a freshly computed row — those duplicates take the new values.
+            # alpha is not a key: every row in this file already shares it.
+            key_cols = ['dataset', 'metric', 'method', 'coverage']
+            new_keys = set(map(tuple, grp[key_cols].itertuples(index=False, name=None)))
+            mask = existing[key_cols].apply(
+                lambda row: tuple(row) in new_keys, axis=1
+            )
+            combined = pd.concat([existing[~mask], grp], ignore_index=True)
+        else:
+            combined = grp
+
+        path = stats_path(alpha)
+        combined.to_csv(path, index=False)
+        print(f"\nSaved {len(grp)} new rows → {path} ({len(combined)} total rows)")
 
 
 if __name__ == '__main__':
