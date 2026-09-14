@@ -31,6 +31,7 @@
 #include "utils/stats.h"
 #include "utils/types.h"
 #include "utils/graph.h"
+#include "gamma_args.h"
 #include "index.h"
 #include "parlay/parallel.h"
 #include "parlay/primitives.h"
@@ -49,11 +50,11 @@ void ANN_Quantized(Graph<indexType> &G, long k, BuildParams &BP,
   bool verbose = BP.verbose;
   using findex = knn_index<QPointRange, QQPointRange, indexType>;
   findex I(BP);
-  // -gamma / -S are parsed here rather than in bench/neighborsTime.C so the
-  // shared ParlayANN driver stays untouched; unknown flags are ignored by
-  // commandLine, so they pass through it to us.
-  I.gamma_param = BP.gamma;
-  I.S_param = BP.sample_size;
+  // -gamma / -S are read from the process's own argv (see gamma_args.h) rather
+  // than from BuildParams, so this builds against a stock ParlayANN checkout
+  // with no edits to its shared headers or driver.
+  I.gamma_param = gamma_args::gamma_value();
+  I.S_param = gamma_args::sample_size_value();
   indexType start_point;
   double idx_time;
   stats<unsigned int> BuildStats(G.size());

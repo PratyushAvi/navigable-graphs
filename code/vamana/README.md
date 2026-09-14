@@ -15,18 +15,29 @@ Only the Vamana-specific sources. The supporting headers (`algorithms/utils/`,
 rather than duplicated — they are a large body of upstream code that this project
 does not modify.
 
-Because of that, **the ParlayANN checkout is still required to build**, and the
-build also depends on the local arm64/macOS portability fixes in that checkout
-(`utils/graph.h`, `utils/point_range.h`, `utils/NSGDist.h`,
-`bench/parallelDefsANN`), which are currently uncommitted there.
+**The ParlayANN checkout is required to build**, but it is used entirely
+unmodified -- no patches to apply, and the Makefile does not include ParlayANN's
+`bench/parallelDefsANN`, so a local edit to that file cannot affect this build.
+
+The one remaining caveat: on arm64/macOS the upstream `utils/graph.h`,
+`utils/point_range.h` and `utils/NSGDist.h` need small portability fixes
+(`aligned_alloc` sizing, `MADV_HUGEPAGE`, `x86intrin.h`). Those are edits to
+upstream headers this copy does not own. On Linux/x86 no changes are needed.
 
 ## Build
 
 ```sh
 cd code/vamana
-make                      # expects ../../ParlayANN
-make PARLAYANN=/path/to/ParlayANN   # or point it elsewhere
+make                                  # expects ../../ParlayANN
+make PARLAYANN=/path/to/ParlayANN     # checkout elsewhere
+make CXX=g++-13                       # pick a compiler
+make ARCHFLAGS=                       # portable: no -march/-mcpu=native
 ```
+
+`ARCHFLAGS=` matters on HPC: `-march=native` targets the machine doing the
+compile, so a binary built on a login node can hit an illegal instruction on a
+compute node with a different CPU. Build with `ARCHFLAGS=` (or inside a job on
+the target node) when they differ.
 
 `-I .` precedes ParlayANN's include path, so the headers here take precedence
 over the originals in `ParlayANN/algorithms/vamana/`.
@@ -139,11 +150,22 @@ This is inherent to Vamana's candidate generation, not to the stopping rule.
 
 - `index.h` — the sample (`build_sample`) and the stopping rule in `robustPrune`.
 - `neighbors.h` — passes `-gamma`/`-S` from `BuildParams` onto the index.
-- `patches/gamma-driver.patch` — the two ParlayANN files that must also change:
-  `utils/types.h` (two defaulted `BuildParams` fields) and
-  `bench/neighborsTime.C` (parsing `-gamma`/`-S`). Both are outside this copy, so
-  the patch is kept here; apply with `git apply` from the ParlayANN root. Both
-  changes are additive and leave every other algorithm's behaviour untouched.
+- `gamma_args.h` — reads `-gamma`/`-S` from the process's own argv, so no
+  ParlayANN file needs changing. An earlier version put these on `BuildParams`
+  in ParlayANN's `utils/types.h`; that made every checkout need a patch applied
+  before it would compile, which is exactly how a fresh HPC clone ends up
+  failing with `BuildParams has no member named gamma`. Reading argv keeps the
+  upstream tree stock.
 
 With `-gamma` absent the binary reproduces the pre-change baseline byte-for-byte
 (md5 `3ba0cc6187e07a918a0767d96c5d81cc`), so stock Vamana runs are unaffected.
+
+### How `-gamma`/`-S` are read
+
+ParlayANN's driver (`bench/neighborsTime.C`) parses the command line and never
+passes argv down to `ANN`, so `gamma_args.h` recovers the process arguments
+itself, trying in order: a constructor-attribute function (GCC and Clang hand it
+`(argc, argv)` on both glibc and macOS), then `/proc/self/cmdline` on Linux, then
+`_NSGetArgv` on macOS. If every route fails the flags read as absent and the
+build runs as stock Vamana, rather than misbehaving. ParlayANN's `commandLine`
+ignores flags it was not asked about, so `-gamma`/`-S` pass through it harmlessly.
