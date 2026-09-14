@@ -49,6 +49,11 @@ void ANN_Quantized(Graph<indexType> &G, long k, BuildParams &BP,
   bool verbose = BP.verbose;
   using findex = knn_index<QPointRange, QQPointRange, indexType>;
   findex I(BP);
+  // -gamma / -S are parsed here rather than in bench/neighborsTime.C so the
+  // shared ParlayANN driver stays untouched; unknown flags are ignored by
+  // commandLine, so they pass through it to us.
+  I.gamma_param = BP.gamma;
+  I.S_param = BP.sample_size;
   indexType start_point;
   double idx_time;
   stats<unsigned int> BuildStats(G.size());

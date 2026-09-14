@@ -25,8 +25,11 @@
 #include <math.h>
 
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <set>
+#include <unordered_map>
+#include <vector>
 
 #include "utils/point_range.h"
 #include "utils/graph.h"
@@ -53,9 +56,51 @@ struct knn_index {
   std::set<indexType> delete_set;
   indexType start_point;
 
+  // --- gamma stopping rule ------------------------------------------------
+  // When gamma > 0, robustPrune stops adding edges once the out-neighbourhood
+  // alpha-covers a gamma fraction of a fixed uniform sample of the dataset,
+  // instead of stopping at BP.R edges. The sample is drawn once in build_index
+  // and shared by every node, so the denominator (sample.size()) is the same
+  // everywhere and gamma means the same thing at every node.
+  double gamma = 0.0;                     // 0 disables; otherwise in (0, 1]
+  parlay::sequence<indexType> sample;     // the S sampled point ids
+  double gamma_param = 0.0;               // set from -gamma before build_index
+  long S_param = 0;                       // set from -S; <= 0 means 10 log n
+
   knn_index(BuildParams &BP) : BP(BP) {}
 
   indexType get_start() { return start_point; }
+
+  // Draw S points uniformly at random without replacement. S defaults to
+  // 10 log n (natural log), clamped to n.
+  void build_sample(size_t n, double gamma_, long S_) {
+    gamma = gamma_;
+    if (gamma <= 0.0) return;
+
+    long S = S_;
+    if (S <= 0) S = static_cast<long>(std::ceil(10.0 * std::log(std::max<size_t>(n, 2))));
+    if (S > static_cast<long>(n)) S = static_cast<long>(n);
+
+    // Partial Fisher-Yates: uniform without replacement, O(S) draws, and we
+    // never materialise a length-n permutation for a large dataset.
+    std::mt19937_64 rng(12345);
+    std::unordered_map<size_t, size_t> swapped;
+    auto at = [&](size_t i) {
+      auto it = swapped.find(i);
+      return it == swapped.end() ? i : it->second;
+    };
+    sample = parlay::sequence<indexType>::uninitialized(S);
+    for (long i = 0; i < S; i++) {
+      std::uniform_int_distribution<size_t> dis(i, n - 1);
+      size_t j = dis(rng);
+      sample[i] = static_cast<indexType>(at(j));
+      swapped[j] = at(i);
+    }
+    std::cout << "gamma stopping rule: gamma = " << gamma
+              << ", |sample| = " << sample.size()
+              << " (need " << static_cast<long>(std::ceil(gamma * sample.size()))
+              << " covered)" << std::endl;
+  }
 
   //robustPrune routine as found in DiskANN paper, with the exception
   //that the new candidate set is added to the field new_nbhs instead
@@ -92,7 +137,35 @@ struct knn_index {
 
     size_t candidate_idx = 0;
 
-    while (new_nbhs.size() < BP.R && candidate_idx < candidates.size()) {
+    // --- gamma stopping rule ----------------------------------------------
+    // With gamma enabled the loop runs until the chosen edges alpha-cover a
+    // gamma fraction of the shared sample, rather than until BP.R edges. R then
+    // only bounds the allocation (see the cap below), not the selection.
+    const bool use_gamma = (gamma > 0.0) && (sample.size() > 0);
+    // A node's own distances to the sample: s is covered by waypoint w when
+    // alpha * d(w, s) <= d(p, s), the same test robustPrune already applies to
+    // candidates, so the rule stays consistent with the pruning geometry.
+    std::vector<distanceType> d_p_sample;
+    std::vector<char> covered;
+    size_t n_covered = 0, need = 0;
+    if (use_gamma) {
+      d_p_sample.resize(sample.size());
+      covered.assign(sample.size(), 0);
+      for (size_t i = 0; i < sample.size(); i++) {
+        distance_comps++;
+        d_p_sample[i] = Points[sample[i]].distance(Points[p]);
+        // p covers itself; don't let it keep the loop alive.
+        if (sample[i] == p) { covered[i] = 1; n_covered++; }
+      }
+      need = static_cast<size_t>(std::ceil(gamma * sample.size()));
+    }
+
+    // R still caps the degree because Graph allocates n * (R + 1) slots and
+    // update_neighbors aborts past maxDeg; gamma decides the degree below it.
+    const size_t degree_cap = static_cast<size_t>(BP.R);
+
+    while (candidate_idx < candidates.size() && new_nbhs.size() < degree_cap) {
+      if (use_gamma && n_covered >= need) break;
       // Don't need to do modifications.
       int p_star = candidates[candidate_idx].first;
       candidate_idx++;
@@ -101,6 +174,17 @@ struct knn_index {
       }
 
       new_nbhs.push_back(p_star);
+
+      if (use_gamma) {
+        for (size_t i = 0; i < sample.size(); i++) {
+          if (covered[i]) continue;
+          distance_comps++;
+          if (alpha * Points[p_star].distance(Points[sample[i]]) <= d_p_sample[i]) {
+            covered[i] = 1;
+            n_covered++;
+          }
+        }
+      }
 
       for (size_t i = candidate_idx; i < candidates.size(); i++) {
         int p_prime = candidates[i].first;
@@ -151,6 +235,8 @@ struct knn_index {
                    stats<indexType> &BuildStats, bool sort_neighbors = true){
     std::cout << "Building graph..." << std::endl;
     set_start();
+    // Draw the shared sample before any pruning happens.
+    build_sample(Points.size(), gamma_param, S_param);
     parlay::sequence<indexType> inserts = parlay::tabulate(Points.size(), [&] (size_t i){
       return static_cast<indexType>(i);});
     if (BP.single_batch != 0) {
