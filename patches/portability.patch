@@ -1,0 +1,119 @@
+diff --git a/algorithms/bench/parallelDefsANN b/algorithms/bench/parallelDefsANN
+index 17e8eed..f46833f 100644
+--- a/algorithms/bench/parallelDefsANN
++++ b/algorithms/bench/parallelDefsANN
+@@ -5,7 +5,16 @@ JEMALLOCLD = $(shell jemalloc-config --libdir)
+ JEMALLOC = -L$(JEMALLOCLD) -ljemalloc 
+ endif
+ 
+-CCFLAGS = -mcx16 -O3 -std=c++17 -march=native -DNDEBUG -I .
++# x86 needs -mcx16 for 128-bit CAS; arm64 has it natively and clang rejects the flag.
++# Apple clang also rejects -march=native on arm64, where -mcpu=native is the equivalent.
++ARCH = $(shell uname -m)
++ifeq ($(ARCH),arm64)
++ARCHFLAGS = -mcpu=native
++else
++ARCHFLAGS = -mcx16 -march=native
++endif
++
++CCFLAGS = $(ARCHFLAGS) -O3 -std=c++17 -DNDEBUG -I .
+ CLFLAGS = -ldl $(JEMALLOC)
+ 
+ OMPFLAGS = -DPARLAY_OPENMP -fopenmp
+diff --git a/algorithms/utils/NSGDist.h b/algorithms/utils/NSGDist.h
+index aab1509..3dc4f22 100644
+--- a/algorithms/utils/NSGDist.h
++++ b/algorithms/utils/NSGDist.h
+@@ -6,7 +6,9 @@
+ #define EFANNA2E_DISTANCE_H
+ 
+ #include <math.h>
++#if defined(__x86_64__) || defined(__i386__)
+ #include <x86intrin.h>
++#endif
+ 
+ #include <algorithm>
+ #include <iostream>
+diff --git a/algorithms/utils/graph.h b/algorithms/utils/graph.h
+index 424d96c..1ece2c5 100644
+--- a/algorithms/utils/graph.h
++++ b/algorithms/utils/graph.h
+@@ -30,6 +30,23 @@
+ #include <fcntl.h>
+ #include <iostream>
+ #include <sys/mman.h>
++
++// MADV_HUGEPAGE is Linux-only; it is an advisory hint, so defining it away on
++// other platforms (e.g. macOS) leaves allocation behaviour unchanged.
++#ifndef MADV_HUGEPAGE
++#define MADV_HUGEPAGE 0
++#endif
++
++#ifndef PARLAYANN_ALIGNED_ALLOC
++#define PARLAYANN_ALIGNED_ALLOC
++// POSIX (and macOS) require aligned_alloc's size to be a multiple of the
++// alignment; glibc tolerates other sizes. Round up so the call is portable.
++// Over-allocating to the 2MB boundary matches the huge-page intent anyway.
++static inline void* parlayann_aligned_alloc(size_t alignment, size_t size) {
++  size_t rounded = ((size + alignment - 1) / alignment) * alignment;
++  return aligned_alloc(alignment, rounded);
++}
++#endif
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -138,7 +155,7 @@ struct Graph{
+   void allocate_graph(long maxDeg, size_t n) {
+     long cnt = n * (maxDeg + 1);
+     long num_bytes = cnt * sizeof(indexType);
+-    indexType* ptr = (indexType*) aligned_alloc(1l << 21, num_bytes);
++    indexType* ptr = (indexType*) parlayann_aligned_alloc(1l << 21, num_bytes);
+     madvise(ptr, num_bytes, MADV_HUGEPAGE);
+     parlay::parallel_for(0, cnt, [&] (long i) {ptr[i] = 0;});
+     graph = std::shared_ptr<indexType[]>(ptr, std::free);
+diff --git a/algorithms/utils/point_range.h b/algorithms/utils/point_range.h
+index 160151f..a8a6366 100644
+--- a/algorithms/utils/point_range.h
++++ b/algorithms/utils/point_range.h
+@@ -23,6 +23,23 @@
+ #pragma once
+ 
+ #include <sys/mman.h>
++
++// MADV_HUGEPAGE is Linux-only; it is an advisory hint, so defining it away on
++// other platforms (e.g. macOS) leaves allocation behaviour unchanged.
++#ifndef MADV_HUGEPAGE
++#define MADV_HUGEPAGE 0
++#endif
++
++#ifndef PARLAYANN_ALIGNED_ALLOC
++#define PARLAYANN_ALIGNED_ALLOC
++// POSIX (and macOS) require aligned_alloc's size to be a multiple of the
++// alignment; glibc tolerates other sizes. Round up so the call is portable.
++// Over-allocating to the 2MB boundary matches the huge-page intent anyway.
++static inline void* parlayann_aligned_alloc(size_t alignment, size_t size) {
++  size_t rounded = ((size + alignment - 1) / alignment) * alignment;
++  return aligned_alloc(alignment, rounded);
++}
++#endif
+ #include <algorithm>
+ #include <iostream>
+ 
+@@ -57,7 +74,7 @@ struct PointRange{
+     int num_bytes = p.num_bytes();
+     aligned_bytes = (num_bytes <= 32) ? 32 : 64 * ((num_bytes - 1)/64 + 1);
+     long total_bytes = n * aligned_bytes;
+-    byte* ptr = (byte*) aligned_alloc(1l << 21, total_bytes);
++    byte* ptr = (byte*) parlayann_aligned_alloc(1l << 21, total_bytes);
+     madvise(ptr, total_bytes, MADV_HUGEPAGE);
+     values = std::shared_ptr<byte[]>(ptr, std::free);
+     byte* vptr = values.get();
+@@ -95,7 +112,7 @@ struct PointRange{
+       if (aligned_bytes != num_bytes)
+         std::cout << "Aligning bytes to " << aligned_bytes << std::endl;
+       long total_bytes = n * aligned_bytes;
+-      byte* ptr = (byte*) aligned_alloc(1l << 21, total_bytes);
++      byte* ptr = (byte*) parlayann_aligned_alloc(1l << 21, total_bytes);
+       madvise(ptr, total_bytes, MADV_HUGEPAGE);
+       values = std::shared_ptr<byte[]>(ptr, std::free);
+       size_t BLOCK_SIZE = 1000000;
