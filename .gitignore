@@ -4,3 +4,5 @@ new_results/
 code/slurm_out/
 almost_navigable_graphs/results/
 ParlayANN
+# built vamana binary (9.7M, rebuild with `make` in code/vamana)
+code/vamana/neighbors
