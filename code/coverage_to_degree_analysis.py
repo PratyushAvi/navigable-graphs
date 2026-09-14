@@ -25,6 +25,37 @@ def alpha_slug(alpha):
     return f"{alpha:g}".replace('.', 'p')
 
 
+def measure_gamma(file, n_nodes, computed_sources):
+    """Largest coverage % every source reaches once all its edges are used.
+
+    Each line's last uncov is what remains after the whole neighborhood is spent,
+    so the worst source over the file caps the sweep: above that level at least one
+    source can never qualify, and its out-degree would be recorded as its full
+    degree rather than a real answer.
+    """
+    worst_uncov = 0
+    counter = 0
+    with open(file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if computed_sources is not None:
+                if counter >= len(computed_sources):
+                    break
+                neighborhood = ast.literal_eval(line)
+            else:
+                neighborhood = ast.literal_eval(line[line.index(' ') + 1:])
+            counter += 1
+            if neighborhood:
+                worst_uncov = max(worst_uncov, neighborhood[-1][1])
+            else:
+                worst_uncov = max(worst_uncov, n_nodes)
+    if counter == 0:
+        return None
+    return 100.0 * (1.0 - worst_uncov / n_nodes)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Compute graph degree stats at multiple coverage levels')
     parser.add_argument('--dataset', type=str, default=None,
@@ -52,6 +83,12 @@ def main():
                         help='Maximum coverage level in percent (default: 100.0)')
     parser.add_argument('--step-size', type=float, default=0.5,
                         help='Step size between coverage levels in percent (default: 0.5)')
+    parser.add_argument('--gamma', type=float, default=None,
+                        help='Stop the coverage sweep at this percentage. Levels above gamma are '
+                             'dropped, since no source can reach them even using every edge. By '
+                             'default gamma is measured from the data (the minimum over sources of '
+                             'the coverage attained after all edges); a fully navigable graph gives '
+                             'gamma = 100. Pass a value to override the measurement.')
     parser.add_argument('--total-points', type=int, required=True,
                         help='Size of the full dataset that coverage is measured against '
                              '(the universe uncov counts range over, e.g. 1000000000 for bigann)')
@@ -59,14 +96,23 @@ def main():
                         help='Vector dimensionality, recorded in the output for reference (default: -1)')
     args = parser.parse_args()
 
-    # Build sorted list of coverage levels
-    coverages = []
-    c = args.min_coverage
-    while c <= args.max_coverage + 1e-9:
-        coverages.append(round(c, 4))
-        c = round(c + args.step_size, 10)
+    # Build sorted list of coverage levels. This is the full requested sweep; each
+    # file truncates it to the levels its own gamma can actually reach.
+    def build_coverages(upper):
+        levels = []
+        c = args.min_coverage
+        while c <= upper + 1e-9:
+            levels.append(round(c, 4))
+            c = round(c + args.step_size, 10)
+        return levels
+
+    coverages = build_coverages(args.max_coverage)
     n_cov = len(coverages)
+    if not coverages:
+        parser.error(f"empty coverage sweep: min {args.min_coverage} > max {args.max_coverage}")
     print(f"Coverage levels ({n_cov}): {coverages[0]}% to {coverages[-1]}% step {args.step_size}%")
+    if args.gamma is not None:
+        print(f"gamma fixed at {args.gamma:g}% (measurement skipped)")
 
     SAVEPATH = "/scratch/pa2439/ANN-Search/navigable_graph_results/new_results"
     STATS_DIR = "/scratch/pa2439/ANN-Search/navigable_graph_results"
@@ -143,6 +189,11 @@ def main():
         # Determine which (dataset, metric, method) combos are already fully done.
         # Checked against that alpha's own file, so the same graph at a new alpha
         # is never skipped because the old alpha was already computed.
+        #
+        # A gamma-capped run stops below --max-coverage, so requiring the whole
+        # sweep here would mark those combos permanently incomplete and recompute
+        # them on every invocation. A combo counts as done when it holds every
+        # requested level up to the highest one it actually recorded.
         cov_set_required = set(coverages)
         done_keys = set()
         for alpha in {parse_filename(f, m)[2] for f, m in adjLists}:
@@ -150,7 +201,9 @@ def main():
             if existing.empty:
                 continue
             for key, grp in existing.groupby(['dataset', 'metric', 'method']):
-                if cov_set_required.issubset(set(grp['coverage'])):
+                have = set(grp['coverage'])
+                reached = max(have) if have else 0.0
+                if {c for c in cov_set_required if c <= reached + 1e-9}.issubset(have):
                     done_keys.add((alpha,) + key)
 
         files_to_process = []
@@ -174,17 +227,8 @@ def main():
         n_nodes = args.total_points
         print(f"\nProcessing {dataset_name}-{metric} [{method}, alpha={alpha:g}] ({n_nodes} nodes)")
 
-        # uncov_left threshold for each coverage level (non-increasing)
-        # coverage c% is achieved when uncov_left <= (1 - c/100) * n_nodes.
-        # Nudge up by 1e-6 so a source sitting exactly on a boundary (integer
-        # uncov == threshold) isn't pushed to the next edge by float rounding of
-        # (1 - c/100) * n_nodes (e.g. 80% of 10 evaluates to 1.9999999999999996).
-        thresholds = [(1.0 - c / 100.0) * n_nodes + 1e-6 for c in coverages]
-
         # out_deg_per_source[i] = list of n_cov ints: edges needed by source i at each coverage level
         out_deg_per_source = []
-        # in_deg[neighbor] = uint32 array of shape (n_cov,): in-degree at each coverage level
-        in_deg = defaultdict(lambda: np.zeros(n_cov, dtype=np.uint32))
 
         counter = 0
 
@@ -208,6 +252,38 @@ def main():
             with open(computed_txt, 'r') as cf:
                 computed_sources = [int(p.strip()) for p in cf if p.strip()]
             print(f"  {dataset_name}-{metric}: {len(computed_sources)} computed sources")
+
+        # --- cap the sweep at gamma -------------------------------------
+        # Levels above gamma are unreachable for at least one source; without this
+        # they would still emit rows, with that source contributing its full degree
+        # as though the level had been met.
+        if args.gamma is None:
+            gamma = measure_gamma(file, n_nodes, computed_sources)
+            if gamma is None:
+                print(f"  No sources found — skipping")
+                continue
+            print(f"  gamma measured at {gamma:.4g}% (min coverage using all edges)")
+        else:
+            gamma = args.gamma
+
+        coverages = build_coverages(min(args.max_coverage, gamma))
+        n_cov = len(coverages)
+        if not coverages:
+            print(f"  gamma {gamma:.4g}% is below --min-coverage "
+                  f"{args.min_coverage:g}% — no reachable levels, skipping")
+            continue
+        if coverages[-1] < args.max_coverage - 1e-9:
+            print(f"  sweep capped at {coverages[-1]:g}% "
+                  f"(requested up to {args.max_coverage:g}%), {n_cov} levels")
+
+        # in_deg[neighbor] = uint32 array of shape (n_cov,): in-degree at each level
+        in_deg = defaultdict(lambda: np.zeros(n_cov, dtype=np.uint32))
+        # uncov_left threshold for each coverage level (non-increasing)
+        # coverage c% is achieved when uncov_left <= (1 - c/100) * n_nodes.
+        # Nudge up by 1e-6 so a source sitting exactly on a boundary (integer
+        # uncov == threshold) isn't pushed to the next edge by float rounding of
+        # (1 - c/100) * n_nodes (e.g. 80% of 10 evaluates to 1.9999999999999996).
+        thresholds = [(1.0 - c / 100.0) * n_nodes + 1e-6 for c in coverages]
 
         with open(file, 'r') as f:
             first_line = f.readline().strip()

@@ -196,3 +196,31 @@ python beam_search_almost.py \
   --dataset   /scratch/pa2439/ANN-Search/datasets/coco_i2i-512-angular.hdf5 \
   --save_path /scratch/pa2439/ANN-Search/navigable_graph_results/almost_navigable_graphs/beam_results \
   --beam_widths 1 2 4 8 16 32 64 100 128 256 --tests 1000
+
+# mnist — 60,000 × 784
+python coverage_to_degree_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-vamana-mnist-784-euclidean-R32-alpha1.txt \
+    --dataset vamana-mnist-R32 --metric euclidean \
+    --alpha 1.0 --method robust-prune \
+    --total-points 60000 --dimensions 784
+
+# fashion_mnist — 60,000 × 784
+python coverage_to_degree_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-vamana-fashion_mnist-784-euclidean-R32-alpha1.txt \
+    --dataset vamana-fashion_mnist-R32 --metric euclidean \
+    --alpha 1.0 --method robust-prune \
+    --total-points 60000 --dimensions 784
+
+# coco_i2i — 113,287 × 512
+python coverage_to_degree_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-vamana-coco_i2i-512-euclidean-R32-alpha1.txt \
+    --dataset vamana-coco_i2i-R32 --metric euclidean \
+    --alpha 1.0 --method robust-prune \
+    --total-points 113287 --dimensions 512
+
+# glove25 — 1,183,514 × 25
+python coverage_to_degree_analysis.py \
+    --adj-list /scratch/pa2439/ANN-Search/navigable_graph_results/new_results/adj-list-vamana-glove25-25-euclidean-R32-alpha1.txt \
+    --dataset vamana-glove25-R32 --metric euclidean \
+    --alpha 1.0 --method robust-prune \
+    --total-points 1183514 --dimensions 25
