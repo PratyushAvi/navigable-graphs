@@ -41,10 +41,33 @@ Same interface as upstream; this is what `Vamana-Runs.ipynb` shells out to:
     -base_path <base.fbin> -graph_outfile <graph>
 ```
 
-## Baseline
+## Equivalence with ParlayANN
 
-Verified against upstream before any modification: on fashion_mnist
-(60000 points, R=32, L=64, alpha=1.0) both binaries produce byte-identical graph
-files (md5 `3ba0cc6187e07a918a0767d96c5d81cc`), average degree 11.46, max 32.
-Rerun that comparison after changing the algorithm to see exactly what your change
-altered.
+This copy is functionally identical to `ParlayANN/algorithms/vamana/`. The only
+edits are include paths (`"../utils/x.h"` -> `"utils/x.h"`), since the Makefile
+puts `algorithms/` on the include path instead of relying on the file sitting
+inside that directory. Verified four ways:
+
+1. **Source** — every differing line is an `#include`; normalizing those paths
+   makes both files hash identically to upstream.
+2. **Preprocessed** — `g++ -E -P` on `neighbors.h` (which transitively pulls in
+   `index.h` and all of `utils/`) yields byte-identical 3.9M translation units,
+   md5 `b4c3d3cfda9701e29363ebaca9932a9e`. This proves the rewritten includes
+   resolve to the same headers, not merely that the text looks similar.
+3. **Binary** — identical `__TEXT` (4112384) and `__DATA` (49152) section sizes.
+4. **Output** — on fashion_mnist (60000 points), graphs are byte-identical:
+
+   | R | L | alpha | dist_func | md5 |
+   |---|---|-------|-----------|-----|
+   | 32 | 64 | 1.0 | Euclidian | `3ba0cc6187e07a918a0767d96c5d81cc` |
+   | 64 | 128 | 1.2 | Euclidian | `04418193566c886b5e9c5d0906873a0a` |
+   | 16 | 32 | 1.0 | Euclidian | `9633af003f976d5d057f2f9b7d33fa79` |
+   | 32 | 64 | 1.0 | mips | `2a3404c8db23b712cdd614b02ef3c406` |
+
+Re-run any of these after modifying the algorithm to see exactly what changed:
+
+```sh
+./neighbors -R 32 -L 64 -alpha 1.0 -data_type float -dist_func Euclidian \
+    -base_path <base.fbin> -graph_outfile /tmp/g_new
+cmp /tmp/g_new /tmp/g_baseline
+```
