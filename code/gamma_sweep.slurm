@@ -15,8 +15,8 @@
 #SBATCH --account=torch_pr_929_general
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256GB
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64GB
 #SBATCH --time=48:00:00
 #SBATCH --output=slurm_out/gamma_sweep_%j.out
 
