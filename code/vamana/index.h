@@ -65,20 +65,20 @@ struct knn_index {
   double gamma = 0.0;                     // 0 disables; otherwise in (0, 1]
   parlay::sequence<indexType> sample;     // the S sampled point ids
   double gamma_param = 0.0;               // set from -gamma before build_index
-  long S_param = 0;                       // set from -S; <= 0 means 10 log n
+  long S_param = 0;                       // set from -S; <= 0 means 100 log n
 
   knn_index(BuildParams &BP) : BP(BP) {}
 
   indexType get_start() { return start_point; }
 
   // Draw S points uniformly at random without replacement. S defaults to
-  // 10 log n (natural log), clamped to n.
+  // 100 log n (natural log), clamped to n.
   void build_sample(size_t n, double gamma_, long S_) {
     gamma = gamma_;
     if (gamma <= 0.0) return;
 
     long S = S_;
-    if (S <= 0) S = static_cast<long>(std::ceil(10.0 * std::log(std::max<size_t>(n, 2))));
+    if (S <= 0) S = static_cast<long>(std::ceil(100.0 * std::log(std::max<size_t>(n, 2))));
     if (S > static_cast<long>(n)) S = static_cast<long>(n);
 
     // Partial Fisher-Yates: uniform without replacement, O(S) draws, and we

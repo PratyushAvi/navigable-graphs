@@ -61,7 +61,7 @@ CONFIG = {
     "gamma_min":  0.5,
     "gamma_max":  1.0,
     "gamma_step": 0.1,
-    "sample_size": None,        # -S; None = binary default, ceil(10 ln n)
+    "sample_size": None,        # -S; None = binary default, ceil(100 ln n)
 
     # coverage / adj-list
     "coverage_alpha": 1.0,

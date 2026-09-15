@@ -99,7 +99,7 @@ the dataset.
 | flag | meaning |
 |------|---------|
 | `-gamma <g>` | fraction of the sample to cover, in (0, 1]. Omitted or 0 = stock Vamana. |
-| `-S <s>` | sample size. Optional; defaults to `S = ceil(10 ln n)`. |
+| `-S <s>` | sample size. Optional; defaults to `S = ceil(100 ln n)`. |
 
 The sample is drawn once per build (partial Fisher-Yates, uniform without
 replacement, fixed seed) and shared by every node, so the denominator is the same
