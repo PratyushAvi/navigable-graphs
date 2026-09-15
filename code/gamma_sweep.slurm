@@ -40,7 +40,9 @@ COV_MIN=${COV_MIN:-90};  COV_MAX=${COV_MAX:-100};  COV_STEP=${COV_STEP:-0.5}
 EDGE_MIN=${EDGE_MIN:-1}; EDGE_MAX=${EDGE_MAX:-};   EDGE_STEP=${EDGE_STEP:-1}
 
 SEARCH=${SEARCH:-1}                         # 1 = run the recall harness
-SEARCH_K=${SEARCH_K:-"1 10 100"}   # space-separated; one harness run per k
+SEARCH_K=${SEARCH_K:-"1 10"}   # space-separated; one harness run per k.
+                               # k=100 aborts unless the graph can reach 100
+                               # nodes from the start point (raise R first).
 
 # --- paths ----------------------------------------------------------------
 PROJECT=${PROJECT:-/scratch/pa2439/ANN-Search}

@@ -77,7 +77,10 @@ CONFIG = {
     # ParlayANN's harness takes a single -k (its `allr` is a one-element list),
     # so the binary is invoked once per k. It sweeps its own beam-width list
     # (10..1000, filtered to Q >= k) within each. gt_k above must be >= max(k).
-    "search_k": [1, 10, 100],
+    # k=100 aborts on graphs whose reachable set is smaller than 100 -- which
+    # includes stock Vamana at R=32 -- so the default stops at 10. Add 100 with
+    # --search-k when R is large enough to support it.
+    "search_k": [1, 10],
 }
 
 BUILD_TIME_RE = re.compile(r"Graph built in ([0-9.]+) seconds")
@@ -836,26 +839,15 @@ def main():
                 # One invocation per k: ParlayANN's harness runs a single -k.
                 # The stock binary is fine for searching any graph -- the search
                 # code is identical, and -graph_path skips the build entirely.
-                try:
-                    rows = parlay_search(
-                        cfg["vamana_bin"], r.graph, cfg["base_fbin"],
-                        cfg["query_fbin"], gt_path,
-                        out_dir / f"res-{r.graph.name}-k{k}.csv",
-                        k, cfg["R"], cfg["L"], cfg["alpha"],
-                        verbose=args.verbose)
-                except RuntimeError as exc:
-                    # ParlayANN aborts when beam search cannot return k results
-                    # ("returned N elements, which is less than k"). On a sparse
-                    # graph a node's reachable set can be smaller than k, so this
-                    # is a property of the graph, not a failure of the sweep:
-                    # report it and carry on with the other k values.
-                    msg = str(exc)
-                    if "less than k" in msg:
-                        print(f"    k={k:<4} SKIPPED: the graph cannot return "
-                              f"{k} neighbours for every query "
-                              f"(too sparse at this gamma)", flush=True)
-                        continue
-                    raise
+                # No error handling here on purpose: ParlayANN aborts when beam
+                # search cannot return k results, and that abort propagates. A
+                # graph too sparse to serve k is a real result, not something to
+                # paper over -- use a k the graph can support (see --search-k).
+                rows = parlay_search(
+                    cfg["vamana_bin"], r.graph, cfg["base_fbin"],
+                    cfg["query_fbin"], gt_path,
+                    out_dir / f"res-{r.graph.name}-k{k}.csv",
+                    k, cfg["R"], cfg["L"], cfg["alpha"], verbose=args.verbose)
                 for row in rows:
                     search_rows.append({**base, **row})
                 npass = len({r_["pass"] for r_ in rows})
