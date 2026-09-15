@@ -224,3 +224,57 @@ python coverage_to_degree_analysis.py \
     --dataset vamana-glove25-R32 --metric euclidean \
     --alpha 1.0 --method robust-prune \
     --total-points 1183514 --dimensions 25
+
+# =====================================================================
+# gamma sweep: stock Vamana + modified Vamana over a gamma grid, then
+# coverage adj-lists, stats, and ParlayANN's recall harness.
+#
+# Build both binaries first:
+#     cd code/vamana                        && make
+#     cd ParlayANN/algorithms/vamana        && make
+#
+# Each job resumes: graphs and adj-lists already present are skipped, so a
+# job that hits the time limit can be resubmitted unchanged. Results for a
+# dataset accumulate into one CSV pair keyed by (method, gamma, alpha, R, L, S),
+# so these can also be rerun with a different R or gamma grid and the rows
+# coexist rather than overwrite.
+#
+# DATASET must match the hdf5 basename; base.fbin/query.fbin come from the
+# HDF5 -> fbin step in Vamana-Runs.ipynb.
+#
+# DATASET is the hdf5 basename, so coco_i2i and glove25 keep their "-angular"
+# filenames; everything here is built and searched with euclidean distance, which
+# is what METRIC records.
+# =====================================================================
+
+# mnist — 60,000 x 784
+sbatch --export=ALL,DATASET=mnist-784-euclidean,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+    gamma_sweep.slurm
+
+# fashion_mnist — 60,000 x 784
+sbatch --export=ALL,DATASET=fashion_mnist-784-euclidean,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+    gamma_sweep.slurm
+
+# coco_i2i — 113,287 x 512
+sbatch --export=ALL,DATASET=coco_i2i-512-angular,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+    gamma_sweep.slurm
+
+# glove25 — 1,183,514 x 25. The adj-list pass dominates here, so give it the
+# full time limit and skip the row cache (the slurm script does that above
+# 200k points automatically).
+sbatch --time=48:00:00 \
+    --export=ALL,DATASET=glove25-25-angular,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+    gamma_sweep.slurm
+
+# --- variations -------------------------------------------------------
+# Graphs only, no coverage pass or stats (fast; see degree/edge counts first):
+# sbatch --export=ALL,DATASET=mnist-784-euclidean,SEARCH=0 gamma_sweep.slurm
+#
+# A finer gamma grid near 1.0:
+# sbatch --export=ALL,DATASET=mnist-784-euclidean,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.02 gamma_sweep.slurm
+#
+# A different sample size (S is part of the key, so it will not overwrite):
+# sbatch --export=ALL,DATASET=mnist-784-euclidean,SAMPLE_SIZE=500 gamma_sweep.slurm
+#
+# A different max degree:
+# sbatch --export=ALL,DATASET=mnist-784-euclidean,R=64,L=128 gamma_sweep.slurm
