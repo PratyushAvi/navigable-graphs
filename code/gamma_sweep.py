@@ -102,6 +102,19 @@ def read_csr(path):
     return indptr, edges.astype(np.int32), sizes
 
 
+def resolved_sample_size(sample_size, n):
+    """The S the binary will actually use.
+
+    -S <= 0 (or omitted) makes build_sample pick ceil(100 ln n), clamped to n.
+    Recording the resolved number rather than None keeps a run that relied on
+    the default and one that passed the same value explicitly from looking like
+    different configurations in the CSV.
+    """
+    if sample_size and sample_size > 0:
+        return min(int(sample_size), int(n))
+    return min(int(math.ceil(100.0 * math.log(max(int(n), 2)))), int(n))
+
+
 def frange(lo, hi, step):
     """Inclusive float grid that tolerates binary-float drift."""
     out, k = [], 0
@@ -574,7 +587,7 @@ def parlay_search(binary, graph_path, base_fbin, query_fbin, gt_path, res_path,
 # sweep
 # --------------------------------------------------------------------------
 STAT_COLUMNS = [
-    "dataset", "metric", "method", "gamma", "alpha", "R", "L", "dimensions",
+    "dataset", "metric", "method", "gamma", "alpha", "R", "L", "S", "dimensions",
     "sources", "total points", "sweep", "coverage", "edges",
     "mean out degree", "median out degree", "min out degree", "max out degree",
     "median in degree", "min in degree", "max in degree",
@@ -587,7 +600,7 @@ STAT_COLUMNS = [
 ]
 
 SEARCH_COLUMNS = [
-    "dataset", "metric", "method", "gamma", "alpha", "R", "L",
+    "dataset", "metric", "method", "gamma", "alpha", "R", "L", "S",
     "target recall", "beam width", "k", "recall", "QPS",
     "mean seen", "tail seen", "mean expanded", "tail expanded",
     "queries", "pass", "search wall (s)",
@@ -599,9 +612,9 @@ SEARCH_COLUMNS = [
 # configuration replaces its own rows rather than appending duplicates, so the
 # file can be rebuilt incrementally as gammas are added. Same upsert pattern as
 # coverage_to_degree_analysis.py.
-STATS_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L",
+STATS_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L", "S",
              "sweep", "coverage", "edges"]
-SEARCH_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L",
+SEARCH_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L", "S",
               "k", "target recall", "pass"]
 
 
@@ -699,10 +712,13 @@ def main():
         runs.append(RunSpec("vamana", None,
                             out_dir / f"graph-vamana-{tagbase}",
                             out_dir / f"adj-list-vamana-{tagbase}.txt"))
+    # S is part of the filename: different sample sizes are different graphs, and
+    # without it the second one would be skipped as "already built".
+    s_tag = "" if not cfg["sample_size"] else f"-S{int(cfg['sample_size'])}"
     for g in frange(cfg["gamma_min"], cfg["gamma_max"], cfg["gamma_step"]):
         runs.append(RunSpec("mod-vamana", g,
-                            out_dir / f"graph-modvamana-{tagbase}-gamma{g:g}",
-                            out_dir / f"adj-list-modvamana-{tagbase}-gamma{g:g}.txt"))
+                            out_dir / f"graph-modvamana-{tagbase}-gamma{g:g}{s_tag}",
+                            out_dir / f"adj-list-modvamana-{tagbase}-gamma{g:g}{s_tag}.txt"))
 
     print(f"\n{len(runs)} runs planned:")
     for r in runs:
@@ -767,6 +783,10 @@ def main():
             "dataset": cfg["dataset"], "metric": cfg["metric"],
             "method": r.method, "gamma": "" if r.gamma is None else r.gamma,
             "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"],
+            # Stock Vamana draws no sample, so S is blank rather than a number
+            # that would suggest it influenced the build.
+            "S": "" if r.gamma is None else resolved_sample_size(
+                cfg["sample_size"], n_nodes),
             "dimensions": dims, "sources": sources, "total points": n_nodes,
             "build time (s)": round(r.build_s, 3),
             "build wall (s)": round(r.wall_s, 3),
@@ -803,7 +823,9 @@ def main():
             base = {"dataset": cfg["dataset"], "metric": cfg["metric"],
                     "method": r.method,
                     "gamma": "" if r.gamma is None else r.gamma,
-                    "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"]}
+                    "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"],
+                    "S": "" if r.gamma is None else resolved_sample_size(
+                        cfg["sample_size"], n_nodes)}
             for row in rows:
                 search_rows.append({**base, **row})
             npass = len({r_["pass"] for r_ in rows})
