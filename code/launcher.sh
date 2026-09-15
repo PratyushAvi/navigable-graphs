@@ -253,22 +253,22 @@ python coverage_to_degree_analysis.py \
 # =====================================================================
 
 # mnist — 60,000 x 784
-sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/mnist-R64,DATASET=mnist-784-euclidean,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/mnist,DATASET=mnist-784-euclidean,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.01 \
     gamma_sweep.slurm
 
 # fashion_mnist — 60,000 x 784
-sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/fashion_mnist-R64,DATASET=fashion_mnist-784-euclidean,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/fashion_mnist,DATASET=fashion_mnist-784-euclidean,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.01 \
     gamma_sweep.slurm
 
 # coco_i2i — 113,287 x 512
-sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/coco_i2i-R64,DATASET=coco_i2i-512-angular,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/coco_i2i,DATASET=coco_i2i-512-angular,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.01 \
     gamma_sweep.slurm
 
 # glove25 — 1,183,514 x 25. The adj-list pass dominates here, so give it the
 # full time limit and skip the row cache (the slurm script does that above
 # 200k points automatically).
 sbatch --time=48:00:00 \
-    --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/glove25-R64,DATASET=glove25-25-angular,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+    --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/glove25,DATASET=glove25-25-angular,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.01 \
     gamma_sweep.slurm
 
 # --- variations -------------------------------------------------------
