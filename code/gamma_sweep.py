@@ -32,6 +32,18 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from tqdm import tqdm
+except ImportError:                      # progress bars are a convenience
+    def tqdm(it=None, **kw):
+        return it if it is not None else _NullBar()
+
+    class _NullBar:
+        def update(self, n=1): pass
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
 # --------------------------------------------------------------------------
 # CONFIG -- edit these, or override any of them with the matching CLI flag.
 # --------------------------------------------------------------------------
@@ -271,7 +283,7 @@ def completed_nodes(path):
 
 
 def write_adj_list(engine, graph_path, out_path, limit=None, resume=True,
-                   report_every=10000):
+                   desc=None):
     """Write the (neighbor, uncov) adj-list. Resumable. Returns wall seconds."""
     indptr, neighbors, _ = read_csr(graph_path)
     total = len(indptr) - 1
@@ -287,28 +299,39 @@ def write_adj_list(engine, graph_path, out_path, limit=None, resume=True,
 
     t0 = time.perf_counter()
     mode = "a" if start_at else "w"
-    with open(out_path, mode) as out:
-        for i in range(start_at, total):
-            nbrs = neighbors[indptr[i]:indptr[i + 1]]
-            rec = engine.neighborhood_with_uncov(i, nbrs)
-            out.write(f"{i} {rec}\n")
-            out.flush()
-            if (i + 1) % report_every == 0:
-                el = time.perf_counter() - t0
-                done = i + 1 - start_at
-                rate = done / el if el else 0
-                eta = (total - i - 1) / rate if rate else 0
-                print(f"    {i+1:,}/{total:,}  {rate:.0f} nodes/s  eta {eta/60:.1f}m",
-                      flush=True)
+    # initial= makes a resumed run show true overall progress rather than
+    # restarting the bar at zero.
+    bar = tqdm(total=total, initial=start_at, unit="node", desc=desc or "coverage",
+               smoothing=0.05, dynamic_ncols=True,
+               mininterval=BAR_INTERVAL, miniters=0, file=sys.stdout,
+               ascii=not _IS_TTY)          # plain characters in a log file
+    try:
+        with open(out_path, mode) as out:
+            for i in range(start_at, total):
+                nbrs = neighbors[indptr[i]:indptr[i + 1]]
+                rec = engine.neighborhood_with_uncov(i, nbrs)
+                out.write(f"{i} {rec}\n")
+                out.flush()
+                bar.update(1)
+    finally:
+        bar.close()
     return time.perf_counter() - t0
 
 
 # --------------------------------------------------------------------------
 # stats
 # --------------------------------------------------------------------------
-def iter_adj(path):
-    """Yield (source, [(neighbor, uncov), ...]) from an adj-list file."""
+def iter_adj(path, desc=None, total=None):
+    """Yield (source, [(neighbor, uncov), ...]) from an adj-list file.
+
+    Parsing a large adj-list takes a while and each stats pass re-reads it, so
+    `desc` puts a progress bar on the scan.
+    """
     with open(path) as f:
+        if desc and _IS_TTY:
+            f = tqdm(f, desc=desc, total=total, unit="node", smoothing=0.05,
+                     dynamic_ncols=True, mininterval=BAR_INTERVAL,
+                     file=sys.stdout, leave=False)
         for line in f:
             line = line.strip()
             if not line:
@@ -317,14 +340,14 @@ def iter_adj(path):
             yield int(line[:sp]), ast.literal_eval(line[sp + 1:])
 
 
-def coverage_to_degree_rows(path, n_nodes, cov_levels):
+def coverage_to_degree_rows(path, n_nodes, cov_levels, desc=None):
     """coverage_to_degree_analysis.py's view: degree stats at each coverage level."""
     n_cov = len(cov_levels)
     thresholds = [(1.0 - c / 100.0) * n_nodes + 1e-6 for c in cov_levels]
     out_deg, in_deg, sources = [], collections.defaultdict(
         lambda: np.zeros(n_cov, dtype=np.int64)), 0
 
-    for _src, nbrs in iter_adj(path):
+    for _src, nbrs in iter_adj(path, desc, n_nodes):
         sources += 1
         deg_c = [len(nbrs)] * n_cov
         ptr = 0
@@ -364,12 +387,12 @@ def coverage_to_degree_rows(path, n_nodes, cov_levels):
     return rows, sources
 
 
-def edge_to_coverage_rows(path, n_nodes, edge_levels):
+def edge_to_coverage_rows(path, n_nodes, edge_levels, desc=None):
     """edge_to_coverage_analysis.py's view: coverage reached at each edge count."""
     n_lv = len(edge_levels)
     cov_at = [[] for _ in range(n_lv)]
     sources = 0
-    for _src, nbrs in iter_adj(path):
+    for _src, nbrs in iter_adj(path, desc, n_nodes):
         sources += 1
         deg = len(nbrs)
         for li, e in enumerate(edge_levels):
@@ -398,10 +421,10 @@ def edge_to_coverage_rows(path, n_nodes, edge_levels):
     return rows, sources
 
 
-def summary_stats(path, n_nodes):
+def summary_stats(path, n_nodes, desc=None):
     """Per-graph summary: coverage extremes, degree, total edges."""
     degs, covs, tot = [], [], 0
-    for _src, nbrs in iter_adj(path):
+    for _src, nbrs in iter_adj(path, desc, n_nodes):
         degs.append(len(nbrs))
         tot += len(nbrs)
         last = nbrs[-1][1] if nbrs else n_nodes
@@ -650,6 +673,22 @@ def upsert_csv(path, rows, columns, key_cols):
     return len(new), len(kept)
 
 
+_T0 = time.perf_counter()
+
+# tqdm repaints with a carriage return, which only works on a terminal. Under
+# slurm the output is a file, so every refresh would be a separate line; refresh
+# once a minute there and keep it lively when someone is watching.
+_IS_TTY = sys.stdout.isatty()
+BAR_INTERVAL = 1.0 if _IS_TTY else 60.0
+
+
+def stage(title):
+    """Banner marking a stage boundary, stamped with elapsed wall time."""
+    el = time.perf_counter() - _T0
+    print(f"\n{'=' * 70}\n=== {title}   [+{el/60:.1f} min]\n{'=' * 70}",
+          flush=True)
+
+
 @dataclass
 class RunSpec:
     method: str
@@ -732,14 +771,15 @@ def main():
               f"-> {r.graph.name}")
 
     # ---- build -----------------------------------------------------------
-    print("\n=== building graphs ===")
-    for r in runs:
+    stage("1/4  building graphs")
+    for ri, r in enumerate(runs, 1):
         label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
+        label = f"[{ri}/{len(runs)}] {label}"
         if r.graph.exists() and not args.rebuild:
-            print(f"[{label}] graph exists, skipping build "
+            print(f"{label}: graph exists, skipping build "
                   f"(--rebuild to force)", flush=True)
             continue
-        print(f"[{label}]", flush=True)
+        print(f"{label}: building", flush=True)
         binary = cfg["mod_vamana_bin"] if r.gamma is not None else cfg["vamana_bin"]
         r.build_s, r.wall_s = run_vamana(
             binary, cfg["base_fbin"], r.graph, cfg["R"], cfg["L"], cfg["alpha"],
@@ -751,20 +791,22 @@ def main():
         return
 
     # ---- coverage: one engine shared by every run ------------------------
-    print("\n=== adj-lists ===")
+    stage("2/4  coverage adj-lists")
     engine = CoverageEngine(cfg["base_fbin"], dtype=cfg["dtype"],
                             alpha=cfg["coverage_alpha"], chunk=cfg["chunk"],
                             cache_rows=not args.no_row_cache)
     n_nodes = engine.n
-    for r in runs:
+    for ri, r in enumerate(runs, 1):
         label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
-        print(f"[{label}] -> {r.adj.name}", flush=True)
-        r.adj_s = write_adj_list(engine, r.graph, r.adj, limit=cfg["limit"])
+        label = f"[{ri}/{len(runs)}] {label}"
+        print(f"{label} -> {r.adj.name}", flush=True)
+        r.adj_s = write_adj_list(engine, r.graph, r.adj, limit=cfg["limit"],
+                                 desc=label)
         if r.adj_s:
             print(f"  adj-list {r.adj_s:.1f}s", flush=True)
 
     # ---- stats -----------------------------------------------------------
-    print("\n=== stats ===")
+    stage("3/4  stats")
     cov_levels = frange(cfg["cov_min"], cfg["cov_max"], cfg["cov_step"])
     # One accumulating file per dataset: R, alpha, method and gamma are columns,
     # so runs with different build parameters share it instead of each writing a
@@ -774,17 +816,21 @@ def main():
     dims = int(engine.V.shape[1])
 
     stats_rows = []
-    for r in runs:
+    for ri, r in enumerate(runs, 1):
         label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
-        summ = summary_stats(r.adj, n_nodes)
+        label = f"[{ri}/{len(runs)}] {label}"
+        print(f"{label}: scanning {r.adj.name}", flush=True)
+        summ = summary_stats(r.adj, n_nodes, f"{label}: summary")
         if not summ:
-            print(f"[{label}] empty adj-list, skipped", flush=True)
+            print(f"{label}: empty adj-list, skipped", flush=True)
             continue
         emax = cfg["edge_max"] or summ["graph max out degree"]
         edge_levels = list(range(cfg["edge_min"], emax + 1, cfg["edge_step"]))
 
-        c_rows, sources = coverage_to_degree_rows(r.adj, n_nodes, cov_levels)
-        e_rows, _ = edge_to_coverage_rows(r.adj, n_nodes, edge_levels)
+        c_rows, sources = coverage_to_degree_rows(
+            r.adj, n_nodes, cov_levels, f"{label}: coverage->degree")
+        e_rows, _ = edge_to_coverage_rows(
+            r.adj, n_nodes, edge_levels, f"{label}: edges->coverage")
         base = {
             "dataset": cfg["dataset"], "metric": cfg["metric"],
             "method": r.method, "gamma": "" if r.gamma is None else r.gamma,
@@ -801,7 +847,7 @@ def main():
         }
         for row in c_rows + e_rows:
             stats_rows.append({**base, **row})
-        print(f"[{label}] {len(c_rows)} coverage rows, {len(e_rows)} edge rows",
+        print(f"{label}: {len(c_rows)} coverage rows, {len(e_rows)} edge rows",
               flush=True)
 
     n_new, n_kept = upsert_csv(stats_path, stats_rows, STAT_COLUMNS, STATS_KEY)
@@ -810,7 +856,7 @@ def main():
 
     # ---- search (ParlayANN's own recall harness) -------------------------
     if args.search:
-        print("\n=== search ===")
+        stage("4/4  search")
         search_ks = cfg["search_k"]
         if isinstance(search_ks, int):
             search_ks = [search_ks]
@@ -825,10 +871,11 @@ def main():
         gt_path = cfg.get("gt_path") or (out_dir / f"{cfg['dataset']}.gt")
         gt_path = ensure_groundtruth(cfg, gt_path)
         search_rows = []
-        for r in runs:
+        for ri, r in enumerate(runs, 1):
             label = (f"{r.method} gamma={r.gamma}" if r.gamma is not None
                      else r.method)
-            print(f"[{label}]", flush=True)
+            label = f"[{ri}/{len(runs)}] {label}"
+            print(f"{label}", flush=True)
             base = {"dataset": cfg["dataset"], "metric": cfg["metric"],
                     "method": r.method,
                     "gamma": "" if r.gamma is None else r.gamma,
@@ -863,7 +910,7 @@ def main():
         print(f"wrote {search_path}: {n_new} rows from this run, "
               f"{n_kept} kept from earlier runs")
 
-    print("\ndone.")
+    stage(f"done in {(time.perf_counter() - _T0)/60:.1f} min")
 
 
 if __name__ == "__main__":
