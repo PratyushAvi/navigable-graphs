@@ -594,6 +594,44 @@ SEARCH_COLUMNS = [
 ]
 
 
+
+# Rows from every run accumulate into one CSV per dataset. A rerun of the same
+# configuration replaces its own rows rather than appending duplicates, so the
+# file can be rebuilt incrementally as gammas are added. Same upsert pattern as
+# coverage_to_degree_analysis.py.
+STATS_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L",
+             "sweep", "coverage", "edges"]
+SEARCH_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L",
+              "k", "target recall", "pass"]
+
+
+def upsert_csv(path, rows, columns, key_cols):
+    """Merge `rows` into the CSV at `path`, replacing rows with matching keys."""
+    path = Path(path)
+    new = [{c: r.get(c, "") for c in columns} for r in rows]
+    if not new:
+        return 0, 0
+
+    kept = []
+    if path.exists():
+        new_keys = {tuple(str(r.get(c, "")) for c in key_cols) for r in new}
+        with open(path, newline="") as fh:
+            for r in csv.DictReader(fh):
+                if tuple(str(r.get(c, "")) for c in key_cols) not in new_keys:
+                    kept.append({c: r.get(c, "") for c in columns})
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
+        w.writeheader()
+        for r in kept:
+            w.writerow(r)
+        for r in new:
+            w.writerow(r)
+    os.replace(tmp, path)          # atomic: a crash cannot truncate the CSV
+    return len(new), len(kept)
+
+
 @dataclass
 class RunSpec:
     method: str
@@ -706,74 +744,80 @@ def main():
     # ---- stats -----------------------------------------------------------
     print("\n=== stats ===")
     cov_levels = frange(cfg["cov_min"], cfg["cov_max"], cfg["cov_step"])
-    stats_path = out_dir / f"sweep-stats-{tagbase}.csv"
-    search_path = out_dir / f"sweep-search-{tagbase}.csv"
+    # One accumulating file per dataset: R, alpha, method and gamma are columns,
+    # so runs with different build parameters share it instead of each writing a
+    # separate CSV.
+    stats_path = out_dir / f"sweep-stats-{cfg['dataset']}.csv"
+    search_path = out_dir / f"sweep-search-{cfg['dataset']}.csv"
     dims = int(engine.V.shape[1])
 
-    with open(stats_path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=STAT_COLUMNS, extrasaction="ignore")
-        w.writeheader()
-        for r in runs:
-            label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
-            summ = summary_stats(r.adj, n_nodes)
-            if not summ:
-                print(f"[{label}] empty adj-list, skipped", flush=True)
-                continue
-            emax = cfg["edge_max"] or summ["graph max out degree"]
-            edge_levels = list(range(cfg["edge_min"], emax + 1, cfg["edge_step"]))
+    stats_rows = []
+    for r in runs:
+        label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
+        summ = summary_stats(r.adj, n_nodes)
+        if not summ:
+            print(f"[{label}] empty adj-list, skipped", flush=True)
+            continue
+        emax = cfg["edge_max"] or summ["graph max out degree"]
+        edge_levels = list(range(cfg["edge_min"], emax + 1, cfg["edge_step"]))
 
-            c_rows, sources = coverage_to_degree_rows(r.adj, n_nodes, cov_levels)
-            e_rows, _ = edge_to_coverage_rows(r.adj, n_nodes, edge_levels)
-            base = {
-                "dataset": cfg["dataset"], "metric": cfg["metric"],
-                "method": r.method, "gamma": "" if r.gamma is None else r.gamma,
-                "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"],
-                "dimensions": dims, "sources": sources, "total points": n_nodes,
-                "build time (s)": round(r.build_s, 3),
-                "build wall (s)": round(r.wall_s, 3),
-                "adjlist wall (s)": round(r.adj_s, 3),
-                **summ,
-            }
-            for row in c_rows + e_rows:
-                w.writerow({**base, **row})
-            print(f"[{label}] {len(c_rows)} coverage rows, {len(e_rows)} edge rows",
-                  flush=True)
-    print(f"wrote {stats_path}")
+        c_rows, sources = coverage_to_degree_rows(r.adj, n_nodes, cov_levels)
+        e_rows, _ = edge_to_coverage_rows(r.adj, n_nodes, edge_levels)
+        base = {
+            "dataset": cfg["dataset"], "metric": cfg["metric"],
+            "method": r.method, "gamma": "" if r.gamma is None else r.gamma,
+            "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"],
+            "dimensions": dims, "sources": sources, "total points": n_nodes,
+            "build time (s)": round(r.build_s, 3),
+            "build wall (s)": round(r.wall_s, 3),
+            "adjlist wall (s)": round(r.adj_s, 3),
+            **summ,
+        }
+        for row in c_rows + e_rows:
+            stats_rows.append({**base, **row})
+        print(f"[{label}] {len(c_rows)} coverage rows, {len(e_rows)} edge rows",
+              flush=True)
+
+    n_new, n_kept = upsert_csv(stats_path, stats_rows, STAT_COLUMNS, STATS_KEY)
+    print(f"wrote {stats_path}: {n_new} rows from this run, "
+          f"{n_kept} kept from earlier runs")
 
     # ---- search (ParlayANN's own recall harness) -------------------------
     if args.search:
         print("\n=== search ===")
         gt_path = cfg.get("gt_path") or (out_dir / f"{cfg['dataset']}.gt")
         gt_path = ensure_groundtruth(cfg, gt_path)
-        with open(search_path, "w", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=SEARCH_COLUMNS, extrasaction="ignore")
-            w.writeheader()
-            for r in runs:
-                label = (f"{r.method} gamma={r.gamma}" if r.gamma is not None
-                         else r.method)
-                print(f"[{label}]", flush=True)
-                # The stock binary is fine for searching any graph: the search
-                # code is identical, and -graph_path skips the build entirely.
-                rows = parlay_search(
-                    cfg["vamana_bin"], r.graph, cfg["base_fbin"],
-                    cfg["query_fbin"], gt_path,
-                    out_dir / f"res-{r.graph.name}.csv",
-                    cfg["search_k"], cfg["R"], cfg["L"], cfg["alpha"],
-                    verbose=args.verbose)
-                base = {"dataset": cfg["dataset"], "metric": cfg["metric"],
-                        "method": r.method,
-                        "gamma": "" if r.gamma is None else r.gamma,
-                        "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"]}
-                for row in rows:
-                    w.writerow({**base, **row})
-                npass = len({r["pass"] for r in rows})
-                best = max(rows, key=lambda x: x["recall"])
-                print(f"    {len(rows)} rows over {npass} pass(es); "
-                      f"best recall {best['recall']:.4f} needed Q="
-                      f"{best['beam width']} "
-                      f"(QPS {best['QPS']:.0f}, seen {best['mean seen']:.0f})",
-                      flush=True)
-        print(f"wrote {search_path}")
+        search_rows = []
+        for r in runs:
+            label = (f"{r.method} gamma={r.gamma}" if r.gamma is not None
+                     else r.method)
+            print(f"[{label}]", flush=True)
+            # The stock binary is fine for searching any graph: the search
+            # code is identical, and -graph_path skips the build entirely.
+            rows = parlay_search(
+                cfg["vamana_bin"], r.graph, cfg["base_fbin"],
+                cfg["query_fbin"], gt_path,
+                out_dir / f"res-{r.graph.name}.csv",
+                cfg["search_k"], cfg["R"], cfg["L"], cfg["alpha"],
+                verbose=args.verbose)
+            base = {"dataset": cfg["dataset"], "metric": cfg["metric"],
+                    "method": r.method,
+                    "gamma": "" if r.gamma is None else r.gamma,
+                    "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"]}
+            for row in rows:
+                search_rows.append({**base, **row})
+            npass = len({r_["pass"] for r_ in rows})
+            best = max(rows, key=lambda x: x["recall"])
+            print(f"    {len(rows)} rows over {npass} pass(es); "
+                  f"best recall {best['recall']:.4f} needed Q="
+                  f"{best['beam width']} "
+                  f"(QPS {best['QPS']:.0f}, seen {best['mean seen']:.0f})",
+                  flush=True)
+
+        n_new, n_kept = upsert_csv(search_path, search_rows, SEARCH_COLUMNS,
+                                   SEARCH_KEY)
+        print(f"wrote {search_path}: {n_new} rows from this run, "
+              f"{n_kept} kept from earlier runs")
 
     print("\ndone.")
 
