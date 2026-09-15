@@ -487,24 +487,32 @@ def ensure_groundtruth(cfg, gt_path):
 def parse_parlay_res_csv(path):
     """Rows from ParlayANN's result CSV.
 
-    Layout is two stacked tables: a graph header, a blank line, then the
-    per-beam-width results. Only the second table is returned.
+    The file is several stacked tables: a graph header, a blank line, a results
+    table, then the whole thing repeated -- the harness runs its sweep more than
+    once, and the later pass is the warm one (higher QPS). Every results table is
+    returned, tagged with `pass_index`, so nothing is silently dropped.
+
+    A row is NOT one beam width. ParlayANN walks its beam list per target recall
+    bucket and reports the first width that reached that target, so the table is
+    a recall-vs-cost curve: "Target recall" is the index and "Q" is the width it
+    needed. Different graphs hit different targets, so row counts vary.
     """
-    rows = []
     with open(path, newline="") as fh:
         lines = list(csv.reader(fh))
-    hdr_i = None
-    for i, row in enumerate(lines):
+
+    rows, pass_i = [], 0
+    i = 0
+    while i < len(lines):
+        row = lines[i]
         if row and row[0] == "Num queries":
-            hdr_i = i
-            break
-    if hdr_i is None:
-        return rows
-    header = lines[hdr_i]
-    for row in lines[hdr_i + 1:]:
-        if not row or not row[0].strip():
-            break
-        rows.append(dict(zip(header, row)))
+            header = row
+            i += 1
+            while i < len(lines) and lines[i] and lines[i][0].strip():
+                rows.append({**dict(zip(header, lines[i])), "pass_index": pass_i})
+                i += 1
+            pass_i += 1
+        else:
+            i += 1
     return rows
 
 
@@ -544,7 +552,10 @@ def parlay_search(binary, graph_path, base_fbin, query_fbin, gt_path, res_path,
     for r in rows:
         out.append({
             # ParlayANN's names on the left, this project's on the right.
-            "beam_width":     int(float(r.get("Q", 0))),
+            # "beam width" is the width that first reached "target recall", not
+            # a swept parameter -- see parse_parlay_res_csv.
+            "target recall":  float(r.get("Target recall", "nan")),
+            "beam width":     int(float(r.get("Q", 0))),
             "k":              int(float(r.get("k", k))),
             "recall":         float(r.get("Actual recall", "nan")),
             "QPS":            float(r.get("QPS", "nan")),
@@ -553,6 +564,7 @@ def parlay_search(binary, graph_path, base_fbin, query_fbin, gt_path, res_path,
             "mean seen":      float(r.get("Average Visited", "nan")),
             "tail seen":      float(r.get("Tail Visited", "nan")),
             "queries":        int(float(r.get("Num queries", 0))),
+            "pass":           r.get("pass_index", 0),
             "search wall (s)": round(wall, 3),
         })
     return out
@@ -576,9 +588,9 @@ STAT_COLUMNS = [
 
 SEARCH_COLUMNS = [
     "dataset", "metric", "method", "gamma", "alpha", "R", "L",
-    "beam_width", "k", "recall", "QPS",
+    "target recall", "beam width", "k", "recall", "QPS",
     "mean seen", "tail seen", "mean expanded", "tail expanded",
-    "queries", "search wall (s)",
+    "queries", "pass", "search wall (s)",
 ]
 
 
@@ -754,9 +766,11 @@ def main():
                         "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"]}
                 for row in rows:
                     w.writerow({**base, **row})
+                npass = len({r["pass"] for r in rows})
                 best = max(rows, key=lambda x: x["recall"])
-                print(f"    {len(rows)} beam widths; best recall "
-                      f"{best['recall']:.4f} at Q={best['beam_width']} "
+                print(f"    {len(rows)} rows over {npass} pass(es); "
+                      f"best recall {best['recall']:.4f} needed Q="
+                      f"{best['beam width']} "
                       f"(QPS {best['QPS']:.0f}, seen {best['mean seen']:.0f})",
                       flush=True)
         print(f"wrote {search_path}")
