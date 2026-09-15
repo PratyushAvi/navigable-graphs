@@ -38,6 +38,13 @@ import numpy as np
 CONFIG = {
     # paths
     "base_fbin":   "/scratch/pa2439/ANN-Search/datasets/glove25-25-angular/base.fbin",
+    # ann-benchmarks HDF5 for this dataset: it ships `neighbors`/`distances`, so
+    # ground truth is converted from it rather than recomputed. Leave None to
+    # fall back to --gt-path or ParlayANN's compute_groundtruth.
+    "hdf5_path":   "/scratch/pa2439/ANN-Search/datasets/glove25-25-angular.hdf5",
+    "gt_path":     None,          # default: <out_dir>/<dataset>.gt
+    "gt_k":        100,           # ground-truth depth; ann-benchmarks ships 100
+    "groundtruth_bin": "../ParlayANN/data_tools/compute_groundtruth",
     "query_fbin":  "/scratch/pa2439/ANN-Search/datasets/glove25-25-angular/query.fbin",
     "out_dir":     "/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep",
     "vamana_bin":     "../ParlayANN/algorithms/vamana/neighbors",  # stock
@@ -67,10 +74,8 @@ CONFIG = {
     "edge_min": 1,   "edge_max": None, "edge_step": 1,     # edges -> coverage
 
     # beam search (off unless --beam-widths is given)
-    "beam_widths": [],
-    "beam_queries": 1000,
-    "beam_seed": 0,
-    "recall_ks": [1, 10, 100],
+    "search_k": 10,               # -k for the recall harness; ParlayANN sweeps
+                                  # its own beam-width list (10..1000, Q >= k)
 }
 
 BUILD_TIME_RE = re.compile(r"Graph built in ([0-9.]+) seconds")
@@ -402,62 +407,155 @@ def summary_stats(path, n_nodes):
 # --------------------------------------------------------------------------
 # beam search
 # --------------------------------------------------------------------------
-def beam_search_rows(graph_path, engine, query_fbin, beam_widths, recall_ks,
-                     n_queries, seed):
-    """Recall / seen / expanded per beam width, averaged over queries.
+def write_gt_file(path, neighbors, distances):
+    """Write ParlayANN's ground-truth format.
 
-    Uses the graph file's CSR directly, so it does not depend on the adj-list.
+    [int32 n][int32 k][n*k int32 ids][n*k float32 dists] -- see groundTruth in
+    ParlayANN/algorithms/utils/types.h.
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "beam_search"))
-    from beam_search import classicBeamSearch           # noqa: E402
+    neighbors = np.ascontiguousarray(neighbors, dtype=np.int32)
+    distances = np.ascontiguousarray(distances, dtype=np.float32)
+    n, k = neighbors.shape
+    with open(path, "wb") as f:
+        np.array([n, k], dtype=np.int32).tofile(f)
+        neighbors.tofile(f)
+        distances.tofile(f)
+    return n, k
 
-    indptr, neighbors, _ = read_csr(graph_path)
-    Q = read_fbin(query_fbin)
-    rng = np.random.default_rng(seed)
-    if n_queries < len(Q):
-        Q = Q[rng.choice(len(Q), n_queries, replace=False)]
 
-    xp = engine.xp
-    V, norms = engine.V, engine.norms
-    Vh = np.asarray(V.get() if engine.on_gpu else V)
-    acc = {(bw, k): {"relevant": 0, "seen": 0, "expanded": 0, "q": 0}
-           for bw in beam_widths for k in recall_ks}
-    maxk = max(recall_ks)
+def groundtruth_from_hdf5(hdf5_path, gt_path, k=None):
+    """Convert an ANN-benchmarks HDF5's own ground truth into ParlayANN's format.
 
+    These files ship `neighbors` and `distances` for the `test` queries, so the
+    exact top-k is already known and nothing has to be recomputed.
+
+    ParlayANN compares squared euclidean distances internally, while
+    ann-benchmarks stores plain euclidean for "-euclidean" datasets, so the
+    distances are squared here. Recall only uses the ids, but the distances are
+    used for tie handling, so the scale has to match.
+    """
+    import h5py
+    with h5py.File(hdf5_path, "r") as f:
+        if "neighbors" not in f or "distances" not in f:
+            raise KeyError(
+                f"{hdf5_path} has no 'neighbors'/'distances' datasets; it does "
+                f"not carry ground truth. Keys: {list(f.keys())}")
+        nbrs = f["neighbors"][:]
+        dists = f["distances"][:]
+    if k is not None and k < nbrs.shape[1]:
+        nbrs, dists = nbrs[:, :k], dists[:, :k]
+    n, kk = write_gt_file(gt_path, nbrs, dists.astype(np.float64) ** 2)
+    print(f"ground truth from {Path(hdf5_path).name}: {n:,} queries x {kk} -> "
+          f"{gt_path}", flush=True)
+    return gt_path
+
+
+def ensure_groundtruth(cfg, gt_path):
+    """Resolve ground truth: use --gt-path, else the HDF5's, else compute it."""
+    gt_path = Path(gt_path)
+    if gt_path.exists():
+        print(f"ground truth present: {gt_path}", flush=True)
+        return gt_path
+
+    if cfg.get("hdf5_path"):
+        return groundtruth_from_hdf5(cfg["hdf5_path"], gt_path, cfg.get("gt_k"))
+
+    gt_bin = Path(cfg["groundtruth_bin"]).resolve()
+    if not gt_bin.exists():
+        raise FileNotFoundError(
+            f"no ground truth available.\n"
+            f"  give --hdf5-path (ann-benchmarks files ship their own), or\n"
+            f"  give --gt-path pointing at an existing .gt file, or\n"
+            f"  build {gt_bin} with: cd ParlayANN/data_tools && "
+            f"make compute_groundtruth")
+    cmd = [str(gt_bin),
+           "-base_path", str(Path(cfg["base_fbin"]).resolve()),
+           "-query_path", str(Path(cfg["query_fbin"]).resolve()),
+           "-gt_path", str(gt_path.resolve()),
+           "-data_type", "float", "-dist_func", "Euclidian",
+           "-k", str(cfg.get("gt_k") or 100)]
+    print(f"computing ground truth -> {gt_path}", flush=True)
+    print("  $", " ".join(cmd), flush=True)
     t0 = time.perf_counter()
-    for qi in range(len(Q)):
-        q = np.asarray(Q[qi], dtype=Vh.dtype)
-        d_q = (np.einsum("ij,ij->i", Vh, Vh) - 2.0 * (Vh @ q) + q @ q
-               if qi == 0 else None)
-        if d_q is None:
-            d_q = np.einsum("ij,ij->i", Vh, Vh) - 2.0 * (Vh @ q) + q @ q
-        true_top = np.argsort(d_q)[:maxk]
-        for bw in beam_widths:
-            k_ret = min(bw, maxk)
-            res, expanded, seen = classicBeamSearch(
-                0, -1, (indptr, neighbors), d_q, bw, k_ret)
-            ret = np.array([node for _, node in sorted(res, key=lambda x: -x[0])])
-            for k in recall_ks:
-                a = acc[(bw, k)]
-                a["relevant"] += len(np.intersect1d(ret[:k], true_top[:k]))
-                a["seen"] += seen
-                a["expanded"] += expanded
-                a["q"] += 1
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"compute_groundtruth failed:\n{r.stdout}\n{r.stderr}")
+    print(f"  done in {time.perf_counter() - t0:.1f}s", flush=True)
+    return gt_path
+
+
+def parse_parlay_res_csv(path):
+    """Rows from ParlayANN's result CSV.
+
+    Layout is two stacked tables: a graph header, a blank line, then the
+    per-beam-width results. Only the second table is returned.
+    """
+    rows = []
+    with open(path, newline="") as fh:
+        lines = list(csv.reader(fh))
+    hdr_i = None
+    for i, row in enumerate(lines):
+        if row and row[0] == "Num queries":
+            hdr_i = i
+            break
+    if hdr_i is None:
+        return rows
+    header = lines[hdr_i]
+    for row in lines[hdr_i + 1:]:
+        if not row or not row[0].strip():
+            break
+        rows.append(dict(zip(header, row)))
+    return rows
+
+
+def parlay_search(binary, graph_path, base_fbin, query_fbin, gt_path, res_path,
+                  k, R, L, alpha, verbose=False):
+    """Run ParlayANN's own recall harness against an existing graph.
+
+    -graph_path loads the graph instead of building one, so this measures search
+    only. ParlayANN sweeps its own built-in beam-width list (10..1000, filtered
+    to Q >= k) and reports recall, QPS and the visited/comparison counters.
+    """
+    binary = Path(binary).resolve()
+    cmd = [str(binary), "-R", str(R), "-L", str(L), "-alpha", str(alpha),
+           "-data_type", "float", "-dist_func", "Euclidian",
+           "-base_path", str(Path(base_fbin).resolve()),
+           "-query_path", str(Path(query_fbin).resolve()),
+           "-gt_path", str(Path(gt_path).resolve()),
+           "-graph_path", str(Path(graph_path).resolve()),
+           "-res_path", str(Path(res_path).resolve()),
+           "-k", str(k)]
+    print("  $", " ".join(cmd), flush=True)
+    t0 = time.perf_counter()
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"search failed:\n{proc.stdout}\n{proc.stderr}")
+    if verbose:
+        print(proc.stdout, flush=True)
     wall = time.perf_counter() - t0
 
-    rows = []
-    for (bw, k), a in acc.items():
-        if not a["q"]:
-            continue
-        rows.append({
-            "beam_width": bw, "k": k,
-            "recall": round(a["relevant"] / (a["q"] * k), 6),
-            "mean seen": round(a["seen"] / a["q"], 2),
-            "mean expanded": round(a["expanded"] / a["q"], 2),
-            "queries": a["q"] // 1,
+    rows = parse_parlay_res_csv(res_path)
+    if not rows:
+        raise RuntimeError(
+            f"no result rows in {res_path}. ParlayANN writes the header but no "
+            f"rows when ground truth is missing or does not match the dataset.")
+
+    out = []
+    for r in rows:
+        out.append({
+            # ParlayANN's names on the left, this project's on the right.
+            "beam_width":     int(float(r.get("Q", 0))),
+            "k":              int(float(r.get("k", k))),
+            "recall":         float(r.get("Actual recall", "nan")),
+            "QPS":            float(r.get("QPS", "nan")),
+            "mean expanded":  float(r.get("Average Cmps", "nan")),
+            "tail expanded":  float(r.get("Tail Cmps", "nan")),
+            "mean seen":      float(r.get("Average Visited", "nan")),
+            "tail seen":      float(r.get("Tail Visited", "nan")),
+            "queries":        int(float(r.get("Num queries", 0))),
             "search wall (s)": round(wall, 3),
         })
-    return rows
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -478,8 +576,9 @@ STAT_COLUMNS = [
 
 SEARCH_COLUMNS = [
     "dataset", "metric", "method", "gamma", "alpha", "R", "L",
-    "beam_width", "k", "recall", "mean seen", "mean expanded", "queries",
-    "search wall (s)",
+    "beam_width", "k", "recall", "QPS",
+    "mean seen", "tail seen", "mean expanded", "tail expanded",
+    "queries", "search wall (s)",
 ]
 
 
@@ -511,9 +610,15 @@ def main():
     p.add_argument("--cov-step", type=float)
     p.add_argument("--edge-min", type=int); p.add_argument("--edge-max", type=int)
     p.add_argument("--edge-step", type=int)
-    p.add_argument("--beam-widths", type=int, nargs="+",
-                   help="run beam search at these widths (default: skip search)")
-    p.add_argument("--beam-queries", type=int); p.add_argument("--beam-seed", type=int)
+    p.add_argument("--search", action="store_true",
+                   help="run ParlayANN's recall harness on each graph")
+    p.add_argument("--search-k", type=int,
+                   help="-k for the recall harness (default 10)")
+    p.add_argument("--hdf5-path",
+                   help="ann-benchmarks HDF5; its neighbors/distances become the "
+                        "ground truth, so nothing is recomputed")
+    p.add_argument("--gt-path", help="existing .gt file to use instead")
+    p.add_argument("--gt-k", type=int)
     p.add_argument("--skip-baseline", action="store_true",
                    help="sweep gamma only, no stock Vamana run")
     p.add_argument("--no-adjlist", action="store_true",
@@ -623,30 +728,37 @@ def main():
                   flush=True)
     print(f"wrote {stats_path}")
 
-    # ---- beam search -----------------------------------------------------
-    bws = cfg["beam_widths"]
-    if bws:
-        print("\n=== beam search ===")
+    # ---- search (ParlayANN's own recall harness) -------------------------
+    if args.search:
+        print("\n=== search ===")
+        gt_path = cfg.get("gt_path") or (out_dir / f"{cfg['dataset']}.gt")
+        gt_path = ensure_groundtruth(cfg, gt_path)
         with open(search_path, "w", newline="") as fh:
             w = csv.DictWriter(fh, fieldnames=SEARCH_COLUMNS, extrasaction="ignore")
             w.writeheader()
             for r in runs:
                 label = (f"{r.method} gamma={r.gamma}" if r.gamma is not None
                          else r.method)
-                print(f"[{label}] widths {bws}", flush=True)
-                rows = beam_search_rows(
-                    r.graph, engine, cfg["query_fbin"], bws, cfg["recall_ks"],
-                    cfg["beam_queries"], cfg["beam_seed"])
+                print(f"[{label}]", flush=True)
+                # The stock binary is fine for searching any graph: the search
+                # code is identical, and -graph_path skips the build entirely.
+                rows = parlay_search(
+                    cfg["vamana_bin"], r.graph, cfg["base_fbin"],
+                    cfg["query_fbin"], gt_path,
+                    out_dir / f"res-{r.graph.name}.csv",
+                    cfg["search_k"], cfg["R"], cfg["L"], cfg["alpha"],
+                    verbose=args.verbose)
                 base = {"dataset": cfg["dataset"], "metric": cfg["metric"],
                         "method": r.method,
                         "gamma": "" if r.gamma is None else r.gamma,
                         "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"]}
                 for row in rows:
                     w.writerow({**base, **row})
-                for row in rows:
-                    print(f"    bw={row['beam_width']:<4} k={row['k']:<4} "
-                          f"recall={row['recall']:.4f} seen={row['mean seen']:.0f}",
-                          flush=True)
+                best = max(rows, key=lambda x: x["recall"])
+                print(f"    {len(rows)} beam widths; best recall "
+                      f"{best['recall']:.4f} at Q={best['beam_width']} "
+                      f"(QPS {best['QPS']:.0f}, seen {best['mean seen']:.0f})",
+                      flush=True)
         print(f"wrote {search_path}")
 
     print("\ndone.")
