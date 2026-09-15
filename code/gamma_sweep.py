@@ -74,8 +74,10 @@ CONFIG = {
     "edge_min": 1,   "edge_max": None, "edge_step": 1,     # edges -> coverage
 
     # beam search (off unless --beam-widths is given)
-    "search_k": 10,               # -k for the recall harness; ParlayANN sweeps
-                                  # its own beam-width list (10..1000, Q >= k)
+    # ParlayANN's harness takes a single -k (its `allr` is a one-element list),
+    # so the binary is invoked once per k. It sweeps its own beam-width list
+    # (10..1000, filtered to Q >= k) within each. gt_k above must be >= max(k).
+    "search_k": [1, 10, 100],
 }
 
 BUILD_TIME_RE = re.compile(r"Graph built in ([0-9.]+) seconds")
@@ -675,8 +677,9 @@ def main():
     p.add_argument("--edge-step", type=int)
     p.add_argument("--search", action="store_true",
                    help="run ParlayANN's recall harness on each graph")
-    p.add_argument("--search-k", type=int,
-                   help="-k for the recall harness (default 10)")
+    p.add_argument("--search-k", type=int, nargs="+",
+                   help="k values for the recall harness; the binary is run "
+                        "once per k (default: 1 10 100)")
     p.add_argument("--hdf5-path",
                    help="ann-benchmarks HDF5; its neighbors/distances become the "
                         "ground truth, so nothing is recomputed")
@@ -805,6 +808,17 @@ def main():
     # ---- search (ParlayANN's own recall harness) -------------------------
     if args.search:
         print("\n=== search ===")
+        search_ks = cfg["search_k"]
+        if isinstance(search_ks, int):
+            search_ks = [search_ks]
+        search_ks = sorted(set(int(k) for k in search_ks))
+        # Recall at k needs at least k ground-truth neighbours per query.
+        if cfg.get("gt_k") and max(search_ks) > cfg["gt_k"]:
+            raise ValueError(
+                f"--search-k up to {max(search_ks)} needs gt_k >= that, "
+                f"but gt_k is {cfg['gt_k']}")
+        print(f"k values: {search_ks}")
+
         gt_path = cfg.get("gt_path") or (out_dir / f"{cfg['dataset']}.gt")
         gt_path = ensure_groundtruth(cfg, gt_path)
         search_rows = []
@@ -812,29 +826,45 @@ def main():
             label = (f"{r.method} gamma={r.gamma}" if r.gamma is not None
                      else r.method)
             print(f"[{label}]", flush=True)
-            # The stock binary is fine for searching any graph: the search
-            # code is identical, and -graph_path skips the build entirely.
-            rows = parlay_search(
-                cfg["vamana_bin"], r.graph, cfg["base_fbin"],
-                cfg["query_fbin"], gt_path,
-                out_dir / f"res-{r.graph.name}.csv",
-                cfg["search_k"], cfg["R"], cfg["L"], cfg["alpha"],
-                verbose=args.verbose)
             base = {"dataset": cfg["dataset"], "metric": cfg["metric"],
                     "method": r.method,
                     "gamma": "" if r.gamma is None else r.gamma,
                     "alpha": cfg["alpha"], "R": cfg["R"], "L": cfg["L"],
                     "S": "" if r.gamma is None else resolved_sample_size(
                         cfg["sample_size"], n_nodes)}
-            for row in rows:
-                search_rows.append({**base, **row})
-            npass = len({r_["pass"] for r_ in rows})
-            best = max(rows, key=lambda x: x["recall"])
-            print(f"    {len(rows)} rows over {npass} pass(es); "
-                  f"best recall {best['recall']:.4f} needed Q="
-                  f"{best['beam width']} "
-                  f"(QPS {best['QPS']:.0f}, seen {best['mean seen']:.0f})",
-                  flush=True)
+            for k in search_ks:
+                # One invocation per k: ParlayANN's harness runs a single -k.
+                # The stock binary is fine for searching any graph -- the search
+                # code is identical, and -graph_path skips the build entirely.
+                try:
+                    rows = parlay_search(
+                        cfg["vamana_bin"], r.graph, cfg["base_fbin"],
+                        cfg["query_fbin"], gt_path,
+                        out_dir / f"res-{r.graph.name}-k{k}.csv",
+                        k, cfg["R"], cfg["L"], cfg["alpha"],
+                        verbose=args.verbose)
+                except RuntimeError as exc:
+                    # ParlayANN aborts when beam search cannot return k results
+                    # ("returned N elements, which is less than k"). On a sparse
+                    # graph a node's reachable set can be smaller than k, so this
+                    # is a property of the graph, not a failure of the sweep:
+                    # report it and carry on with the other k values.
+                    msg = str(exc)
+                    if "less than k" in msg:
+                        print(f"    k={k:<4} SKIPPED: the graph cannot return "
+                              f"{k} neighbours for every query "
+                              f"(too sparse at this gamma)", flush=True)
+                        continue
+                    raise
+                for row in rows:
+                    search_rows.append({**base, **row})
+                npass = len({r_["pass"] for r_ in rows})
+                best = max(rows, key=lambda x: x["recall"])
+                print(f"    k={k:<4} {len(rows)} rows over {npass} pass(es); "
+                      f"best recall {best['recall']:.4f} needed Q="
+                      f"{best['beam width']} "
+                      f"(QPS {best['QPS']:.0f}, seen {best['mean seen']:.0f})",
+                      flush=True)
 
         n_new, n_kept = upsert_csv(search_path, search_rows, SEARCH_COLUMNS,
                                    SEARCH_KEY)

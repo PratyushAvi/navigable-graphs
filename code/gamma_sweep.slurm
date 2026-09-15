@@ -40,7 +40,7 @@ COV_MIN=${COV_MIN:-90};  COV_MAX=${COV_MAX:-100};  COV_STEP=${COV_STEP:-0.5}
 EDGE_MIN=${EDGE_MIN:-1}; EDGE_MAX=${EDGE_MAX:-};   EDGE_STEP=${EDGE_STEP:-1}
 
 SEARCH=${SEARCH:-1}                         # 1 = run the recall harness
-SEARCH_K=${SEARCH_K:-10}
+SEARCH_K=${SEARCH_K:-"1 10 100"}   # space-separated; one harness run per k
 
 # --- paths ----------------------------------------------------------------
 PROJECT=${PROJECT:-/scratch/pa2439/ANN-Search}
@@ -96,7 +96,7 @@ done
 EXTRA=""
 if [[ -n "$SAMPLE_SIZE" ]]; then EXTRA="$EXTRA --sample-size $SAMPLE_SIZE"; fi
 if [[ -n "$EDGE_MAX"    ]]; then EXTRA="$EXTRA --edge-max $EDGE_MAX"; fi
-if [[ "$SEARCH" == "1"  ]]; then EXTRA="$EXTRA --search --search-k $SEARCH_K"; fi
+if [[ "$SEARCH" == "1"  ]]; then EXTRA="$EXTRA --search --search-k $SEARCH_K"; fi  # unquoted: several k
 
 # Large datasets: the per-source distance-row cache is O(n) floats per cached
 # source, so it is only worth it well below a million points.

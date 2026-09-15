@@ -80,6 +80,9 @@ def main():
                     help="coverage levels in percent, e.g. 99 99.5 100")
     ap.add_argument("--coverage-range", type=float, nargs=3,
                     metavar=("MIN", "MAX", "STEP"))
+    ap.add_argument("--gt-k", type=int, default=100,
+                    help="ground-truth depth to convert from the HDF5; must be "
+                         ">= --k (default: 100, what ann-benchmarks ships)")
     ap.add_argument("--k", type=int, default=10,
                     help="-k for the recall harness; ParlayANN sweeps its own "
                          "beam-width list, filtered to Q >= k (default: 10)")
@@ -99,6 +102,9 @@ def main():
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
+    if args.k > args.gt_k:
+        ap.error(f"--k {args.k} needs --gt-k >= {args.k} (currently {args.gt_k})")
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -114,7 +120,10 @@ def main():
                 "no ground truth. Pass --hdf5 (ann-benchmarks files ship their "
                 "own neighbors/distances) or --gt-path. Without it ParlayANN "
                 "writes a header and no result rows.")
-        groundtruth_from_hdf5(args.hdf5, gt_path, args.k)
+        # Convert at full depth, not args.k: a .gt truncated to a small k is
+        # silently reused by a later larger-k run, which would then score recall
+        # against too few true neighbours.
+        groundtruth_from_hdf5(args.hdf5, gt_path, args.gt_k)
     else:
         print(f"ground truth present: {gt_path}")
 
