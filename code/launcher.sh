@@ -245,36 +245,41 @@ python coverage_to_degree_analysis.py \
 # DATASET is the hdf5 basename, so coco_i2i and glove25 keep their "-angular"
 # filenames; everything here is built and searched with euclidean distance, which
 # is what METRIC records.
+#
+# OUT is set per dataset. Runs sharing an OUT accumulate into the one CSV pair
+# there, keyed by (method, gamma, alpha, R, L, S), so a rerun with another gamma
+# grid or sample size adds rows instead of starting a new file. A different R
+# gets its own directory, since its graphs and adj-lists differ.
 # =====================================================================
 
 # mnist — 60,000 x 784
-sbatch --export=ALL,DATASET=mnist-784-euclidean,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/mnist-R64,DATASET=mnist-784-euclidean,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
     gamma_sweep.slurm
 
 # fashion_mnist — 60,000 x 784
-sbatch --export=ALL,DATASET=fashion_mnist-784-euclidean,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/fashion_mnist-R64,DATASET=fashion_mnist-784-euclidean,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
     gamma_sweep.slurm
 
 # coco_i2i — 113,287 x 512
-sbatch --export=ALL,DATASET=coco_i2i-512-angular,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/coco_i2i-R64,DATASET=coco_i2i-512-angular,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
     gamma_sweep.slurm
 
 # glove25 — 1,183,514 x 25. The adj-list pass dominates here, so give it the
 # full time limit and skip the row cache (the slurm script does that above
 # 200k points automatically).
 sbatch --time=48:00:00 \
-    --export=ALL,DATASET=glove25-25-angular,METRIC=euclidean,R=32,L=64,GAMMA_MIN=0.5,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
+    --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/glove25-R64,DATASET=glove25-25-angular,METRIC=euclidean,R=64,L=64,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.1 \
     gamma_sweep.slurm
 
 # --- variations -------------------------------------------------------
 # Graphs only, no coverage pass or stats (fast; see degree/edge counts first):
-# sbatch --export=ALL,DATASET=mnist-784-euclidean,SEARCH=0 gamma_sweep.slurm
+# sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/mnist-R64,DATASET=mnist-784-euclidean,SEARCH=0 gamma_sweep.slurm
 #
 # A finer gamma grid near 1.0:
-# sbatch --export=ALL,DATASET=mnist-784-euclidean,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.02 gamma_sweep.slurm
+# sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/mnist-R64,DATASET=mnist-784-euclidean,GAMMA_MIN=0.9,GAMMA_MAX=1.0,GAMMA_STEP=0.02 gamma_sweep.slurm
 #
 # A different sample size (S is part of the key, so it will not overwrite):
-# sbatch --export=ALL,DATASET=mnist-784-euclidean,SAMPLE_SIZE=500 gamma_sweep.slurm
+# sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/mnist-R64,DATASET=mnist-784-euclidean,SAMPLE_SIZE=500 gamma_sweep.slurm
 #
 # A different max degree:
-# sbatch --export=ALL,DATASET=mnist-784-euclidean,R=64,L=128 gamma_sweep.slurm
+# sbatch --export=ALL,OUT=/scratch/pa2439/ANN-Search/navigable_graph_results/gamma_sweep/mnist-R128,DATASET=mnist-784-euclidean,R=128,L=256 gamma_sweep.slurm
