@@ -58,8 +58,12 @@ SIF=/share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif
 OVERLAY=$SCRATCH/envs/overlay-15GB-500K.ext3
 SING="singularity exec --fakeroot --overlay ${OVERLAY}:ro ${SIF}"
 
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# The coverage pass forks one process per core, so each must stay single
+# threaded: 16 workers each spawning 16 BLAS threads would oversubscribe badly.
+# The numpy work per node is small enough that threading it does not help anyway.
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
 export PARLAY_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 mkdir -p "$OUT"
