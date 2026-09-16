@@ -345,9 +345,11 @@ def write_adj_lists(engine, graphs, out_paths, limit=None, resume=True,
     t0 = time.perf_counter()
     mode = "a" if start_at else "w"
     files = [open(p, mode) for p in out_paths]
+    print(f"  computing coverage for {len(out_paths)} graphs, "
+          f"nodes {start_at:,}..{total:,}", flush=True)
     bar = tqdm(total=total, initial=start_at, unit="node",
                desc=desc or "coverage", smoothing=0.05, dynamic_ncols=True,
-               mininterval=BAR_INTERVAL, miniters=0, file=sys.stdout,
+               mininterval=BAR_INTERVAL, miniters=0, file=BAR_FILE,
                ascii=not _IS_TTY)
     try:
         for i in range(start_at, total):
@@ -386,7 +388,7 @@ def write_adj_list(engine, graph_path, out_path, limit=None, resume=True,
     # restarting the bar at zero.
     bar = tqdm(total=total, initial=start_at, unit="node", desc=desc or "coverage",
                smoothing=0.05, dynamic_ncols=True,
-               mininterval=BAR_INTERVAL, miniters=0, file=sys.stdout,
+               mininterval=BAR_INTERVAL, miniters=0, file=BAR_FILE,
                ascii=not _IS_TTY)          # plain characters in a log file
     try:
         with open(out_path, mode) as out:
@@ -414,7 +416,7 @@ def iter_adj(path, desc=None, total=None):
         if desc and _IS_TTY:
             f = tqdm(f, desc=desc, total=total, unit="node", smoothing=0.05,
                      dynamic_ncols=True, mininterval=BAR_INTERVAL,
-                     file=sys.stdout, leave=False)
+                     file=BAR_FILE, leave=False)
         for line in f:
             line = line.strip()
             if not line:
@@ -762,7 +764,32 @@ _T0 = time.perf_counter()
 # slurm the output is a file, so every refresh would be a separate line; refresh
 # once a minute there and keep it lively when someone is watching.
 _IS_TTY = sys.stdout.isatty()
-BAR_INTERVAL = 1.0 if _IS_TTY else 60.0
+# Redirected output is block-buffered, and tqdm does not flush, so bar refreshes
+# would sit unwritten and the log would look stalled. This forces each one out.
+# 0 = refresh on every node. Under slurm that is one line per node rather than a
+# repainted bar, which is the point: progress is unambiguous and a stall is
+# obvious immediately.
+BAR_INTERVAL = 0.0
+
+
+class _FlushingStream:
+    """stdout wrapper that flushes on every write, for tqdm under slurm."""
+
+    def __init__(self, stream):
+        self._s = stream
+
+    def write(self, data):
+        self._s.write(data)
+        self._s.flush()
+
+    def flush(self):
+        self._s.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
+BAR_FILE = sys.stdout if _IS_TTY else _FlushingStream(sys.stdout)
 
 
 def stage(title):

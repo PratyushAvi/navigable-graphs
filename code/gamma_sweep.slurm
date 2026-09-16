@@ -111,7 +111,7 @@ echo "points: $NPTS"
 srun $SING /bin/bash -c "
     source /ext3/env.sh && conda activate big_ann && \
     cd $CODE && \
-    python gamma_sweep.py \
+    python -u gamma_sweep.py \
         --base-fbin  '$BASE_FBIN' \
         --query-fbin '$QUERY_FBIN' \
         --hdf5-path  '$HDF5' \
