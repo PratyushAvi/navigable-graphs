@@ -39,6 +39,10 @@ SAMPLE_SIZE=${SAMPLE_SIZE:-}                # empty = binary default, 10 ln n
 COV_MIN=${COV_MIN:-90};  COV_MAX=${COV_MAX:-100};  COV_STEP=${COV_STEP:-0.5}
 EDGE_MIN=${EDGE_MIN:-1}; EDGE_MAX=${EDGE_MAX:-};   EDGE_STEP=${EDGE_STEP:-1}
 
+ADJLIST=${ADJLIST:-0}   # 1 = exact coverage adj-lists (hours); 0 = estimate the
+                        # statistics from a sample of ceil(100 ln n) points
+STATS_SAMPLE=${STATS_SAMPLE:-}
+
 SEARCH=${SEARCH:-1}                         # 1 = run the recall harness
 SEARCH_K=${SEARCH_K:-"1 10"}   # space-separated; one harness run per k.
                                # k=100 aborts unless the graph can reach 100
@@ -102,7 +106,9 @@ done
 EXTRA=""
 if [[ -n "$SAMPLE_SIZE" ]]; then EXTRA="$EXTRA --sample-size $SAMPLE_SIZE"; fi
 if [[ -n "$EDGE_MAX"    ]]; then EXTRA="$EXTRA --edge-max $EDGE_MAX"; fi
-if [[ "$SEARCH" == "1"  ]]; then EXTRA="$EXTRA --search --search-k $SEARCH_K"; fi  # unquoted: several k
+if [[ "$SEARCH" == "1"  ]]; then EXTRA="$EXTRA --search --search-k $SEARCH_K"; fi
+if [[ "$ADJLIST" != "1" ]]; then EXTRA="$EXTRA --no-adjlist"; fi
+if [[ -n "$STATS_SAMPLE" ]]; then EXTRA="$EXTRA --stats-sample $STATS_SAMPLE"; fi  # unquoted: several k
 
 # The per-source distance-row cache is off by default: each source is visited
 # once per graph, so it is never read back and just accumulates n floats per

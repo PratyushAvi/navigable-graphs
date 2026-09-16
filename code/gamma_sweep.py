@@ -80,6 +80,11 @@ CONFIG = {
     "limit": None,              # cap nodes, for a quick check
     "dtype": "float64",
     "chunk": 100,
+    # False skips the exact adj-list pass entirely and estimates the statistics
+    # from a sample instead. The exact pass is O(n) distances per edge; the
+    # sampled one is O(S), so it runs in minutes rather than hours.
+    "adjlist": True,
+    "stats_sample": None,       # sample size; None = ceil(100 ln n)
 
     # stats sweeps
     "cov_min": 90.0, "cov_max": 100.0, "cov_step": 0.5,   # coverage -> degree
@@ -332,6 +337,64 @@ def write_adj_list(engine, graph_path, out_path, limit=None, resume=True,
 # --------------------------------------------------------------------------
 # stats
 # --------------------------------------------------------------------------
+def coverage_sample(n, sample_size=None, seed=12345):
+    """S point ids drawn uniformly without replacement, default ceil(100 ln n).
+
+    The same rule build_sample uses in index.h, so a graph built with -gamma and
+    the statistics measured here are judged against the same size of sample.
+    """
+    if not sample_size or sample_size <= 0:
+        sample_size = int(math.ceil(100.0 * math.log(max(int(n), 2))))
+    sample_size = min(int(sample_size), int(n))
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(int(n), size=sample_size, replace=False))
+
+
+def iter_graph_sampled(engine, graph_path, sample, desc=None, limit=None):
+    """Yield (source, [(neighbor, uncov_estimate), ...]) straight from a graph.
+
+    `uncov` is the count still uncovered among the sampled points, scaled to the
+    dataset, rather than an exact count over all n. One source costs O(S * deg)
+    distances instead of O(n * deg), which is what makes this cheap enough to run
+    without the adj-list stage.
+
+    Coverage of s by waypoint w uses the same alpha-domination test as the exact
+    path: s stays uncovered while d(p, s) <= alpha^2 * d(w, s).
+    """
+    indptr, neighbors, _ = read_csr(graph_path)
+    n = engine.n
+    total = len(indptr) - 1
+    if limit:
+        total = min(total, limit)
+    xp = engine.xp
+    S = xp.asarray(np.asarray(sample, dtype=np.int64))
+    n_s = len(sample)
+    scale = n / n_s                       # sampled count -> dataset scale
+    VS = engine.V[S]                      # (S, dim), reused for every source
+    normsS = engine.norms[S]
+
+    rng = range(total)
+    if desc:
+        rng = tqdm(rng, desc=desc, unit="node", total=total, smoothing=0.05,
+                   dynamic_ncols=True, mininterval=BAR_INTERVAL, miniters=0,
+                   file=BAR_FILE, ascii=not _IS_TTY)
+    for i in rng:
+        nbrs = neighbors[indptr[i]:indptr[i + 1]]
+        p = engine.V[i]
+        d_ps = normsS - 2.0 * (VS @ p) + p @ p        # d(i, s) for s in sample
+        alive = xp.ones(n_s, dtype=bool)
+        alive &= (S != i)                             # i covers itself
+        out = []
+        for w in np.asarray(nbrs, dtype=np.int64).tolist():
+            if alive.any():
+                vw = engine.V[w]
+                d_ws = normsS - 2.0 * (VS @ vw) + vw @ vw
+                alive &= (d_ps <= d_ws * engine.alpha_sq)
+                alive &= (S != w)
+            out.append((int(w), int(round(float(alive.sum()) * scale))))
+        yield int(i), out
+
+
 def iter_adj(path, desc=None, total=None):
     """Yield (source, [(neighbor, uncov), ...]) from an adj-list file.
 
@@ -351,14 +414,14 @@ def iter_adj(path, desc=None, total=None):
             yield int(line[:sp]), ast.literal_eval(line[sp + 1:])
 
 
-def coverage_to_degree_rows(path, n_nodes, cov_levels, desc=None):
+def coverage_to_degree_rows(rows, n_nodes, cov_levels):
     """coverage_to_degree_analysis.py's view: degree stats at each coverage level."""
     n_cov = len(cov_levels)
     thresholds = [(1.0 - c / 100.0) * n_nodes + 1e-6 for c in cov_levels]
     out_deg, in_deg, sources = [], collections.defaultdict(
         lambda: np.zeros(n_cov, dtype=np.int64)), 0
 
-    for _src, nbrs in iter_adj(path, desc, n_nodes):
+    for _src, nbrs in rows:
         sources += 1
         deg_c = [len(nbrs)] * n_cov
         ptr = 0
@@ -398,12 +461,12 @@ def coverage_to_degree_rows(path, n_nodes, cov_levels, desc=None):
     return rows, sources
 
 
-def edge_to_coverage_rows(path, n_nodes, edge_levels, desc=None):
+def edge_to_coverage_rows(rows, n_nodes, edge_levels):
     """edge_to_coverage_analysis.py's view: coverage reached at each edge count."""
     n_lv = len(edge_levels)
     cov_at = [[] for _ in range(n_lv)]
     sources = 0
-    for _src, nbrs in iter_adj(path, desc, n_nodes):
+    for _src, nbrs in rows:
         sources += 1
         deg = len(nbrs)
         for li, e in enumerate(edge_levels):
@@ -432,10 +495,10 @@ def edge_to_coverage_rows(path, n_nodes, edge_levels, desc=None):
     return rows, sources
 
 
-def summary_stats(path, n_nodes, desc=None):
+def summary_stats(rows, n_nodes):
     """Per-graph summary: coverage extremes, degree, total edges."""
     degs, covs, tot = [], [], 0
-    for _src, nbrs in iter_adj(path, desc, n_nodes):
+    for _src, nbrs in rows:
         degs.append(len(nbrs))
         tot += len(nbrs)
         last = nbrs[-1][1] if nbrs else n_nodes
@@ -627,6 +690,7 @@ def parlay_search(binary, graph_path, base_fbin, query_fbin, gt_path, res_path,
 # --------------------------------------------------------------------------
 STAT_COLUMNS = [
     "dataset", "metric", "method", "gamma", "alpha", "R", "L", "S", "dimensions",
+    "coverage source", "coverage sample",
     "sources", "total points", "sweep", "coverage", "edges",
     "mean out degree", "median out degree", "min out degree", "max out degree",
     "median in degree", "min in degree", "max in degree",
@@ -766,7 +830,11 @@ def main():
     p.add_argument("--skip-baseline", action="store_true",
                    help="sweep gamma only, no stock Vamana run")
     p.add_argument("--no-adjlist", action="store_true",
-                   help="build graphs only; skip coverage and stats")
+                   help="skip the exact adj-list pass; estimate the statistics "
+                        "from a sample of the points instead")
+    p.add_argument("--stats-sample", type=int,
+                   help="points sampled to estimate coverage "
+                        "(default: ceil(100 ln n), matching -S in the build)")
     p.add_argument("--row-cache", action="store_true",
                    help="cache per-source distance rows. Off by default: each "
                         "source is visited once per graph, so the cache is "
@@ -775,6 +843,9 @@ def main():
                    help="rebuild graphs even when the file already exists")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
+
+    if args.no_adjlist:
+        cfg["adjlist"] = False
 
     for k, v in vars(args).items():
         if v is not None and k in cfg:
@@ -824,32 +895,42 @@ def main():
             gamma=r.gamma, sample_size=cfg["sample_size"], verbose=args.verbose)
         print(f"  build {r.build_s:.3f}s (wall {r.wall_s:.3f}s)", flush=True)
 
-    if args.no_adjlist:
-        print("\n--no-adjlist given; stopping after builds.")
-        return
-
     # ---- coverage: one engine shared by every run ------------------------
-    stage("2/4  coverage adj-lists")
+    # Both paths need it: the exact pass replays against all n points, the
+    # sampled one against S of them, and both use its V and norms.
     engine = CoverageEngine(cfg["base_fbin"], dtype=cfg["dtype"],
                             alpha=cfg["coverage_alpha"], chunk=cfg["chunk"],
                             cache_rows=args.row_cache)
     n_nodes = engine.n
-    # One graph at a time: each adj-list is finished before the next starts, so
-    # an interrupted run leaves completed files rather than every file partial,
-    # and the per-graph timing is real rather than an average. The cost is
-    # recomputing d(v, .) once per graph instead of sharing it across them.
-    for ri, r in enumerate(runs, 1):
-        lbl = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
-        label = f"[{ri}/{len(runs)}] {lbl}"
-        print(f"{label} -> {r.adj.name}", flush=True)
-        r.adj_s = write_adj_list(engine, r.graph, r.adj, limit=cfg["limit"],
-                                 desc=label)
-        if r.adj_s:
-            print(f"  adj-list {r.adj_s:.1f}s", flush=True)
+
+    if cfg["adjlist"]:
+        stage("2/4  coverage adj-lists")
+        # One graph at a time: each adj-list is finished before the next starts,
+        # so an interrupted run leaves completed files rather than every file
+        # partial, and the per-graph timing is real rather than an average.
+        for ri, r in enumerate(runs, 1):
+            lbl = (f"{r.method} gamma={r.gamma}" if r.gamma is not None
+                   else r.method)
+            label = f"[{ri}/{len(runs)}] {lbl}"
+            print(f"{label} -> {r.adj.name}", flush=True)
+            r.adj_s = write_adj_list(engine, r.graph, r.adj,
+                                     limit=cfg["limit"], desc=label)
+            if r.adj_s:
+                print(f"  adj-list {r.adj_s:.1f}s", flush=True)
+    else:
+        stage("2/4  coverage adj-lists (skipped)")
+        print("  --no-adjlist: statistics are estimated from a sample instead, "
+              "straight from the graph files", flush=True)
 
     # ---- stats -----------------------------------------------------------
     stage("3/4  stats")
     cov_levels = frange(cfg["cov_min"], cfg["cov_max"], cfg["cov_step"])
+    sample = (None if cfg["adjlist"]
+              else coverage_sample(n_nodes, cfg["stats_sample"]))
+    if sample is not None:
+        print(f"coverage sample: {len(sample):,} points "
+              f"(ceil(100 ln {n_nodes:,}) unless --stats-sample given)",
+              flush=True)
     # One accumulating file per dataset: R, alpha, method and gamma are columns,
     # so runs with different build parameters share it instead of each writing a
     # separate CSV.
@@ -861,18 +942,27 @@ def main():
     for ri, r in enumerate(runs, 1):
         label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
         label = f"[{ri}/{len(runs)}] {label}"
-        print(f"{label}: scanning {r.adj.name}", flush=True)
-        summ = summary_stats(r.adj, n_nodes, f"{label}: summary")
+        if cfg["adjlist"]:
+            # Exact: uncov counted over every point, read back from the adj-list.
+            print(f"{label}: scanning {r.adj.name}", flush=True)
+            rows = list(iter_adj(r.adj, f"{label}: reading", n_nodes))
+        else:
+            # Estimated: uncov counted over the sample and scaled to n. Each
+            # function below consumes the rows once, so they are materialised.
+            print(f"{label}: estimating coverage from {len(sample):,} "
+                  f"sampled points", flush=True)
+            rows = list(iter_graph_sampled(engine, r.graph, sample,
+                                           desc=f"{label}: sampling",
+                                           limit=cfg["limit"]))
+        summ = summary_stats(rows, n_nodes)
         if not summ:
             print(f"{label}: empty adj-list, skipped", flush=True)
             continue
         emax = cfg["edge_max"] or summ["graph max out degree"]
         edge_levels = list(range(cfg["edge_min"], emax + 1, cfg["edge_step"]))
 
-        c_rows, sources = coverage_to_degree_rows(
-            r.adj, n_nodes, cov_levels, f"{label}: coverage->degree")
-        e_rows, _ = edge_to_coverage_rows(
-            r.adj, n_nodes, edge_levels, f"{label}: edges->coverage")
+        c_rows, sources = coverage_to_degree_rows(rows, n_nodes, cov_levels)
+        e_rows, _ = edge_to_coverage_rows(rows, n_nodes, edge_levels)
         base = {
             "dataset": cfg["dataset"], "metric": cfg["metric"],
             "method": r.method, "gamma": "" if r.gamma is None else r.gamma,
@@ -882,6 +972,9 @@ def main():
             "S": "" if r.gamma is None else resolved_sample_size(
                 cfg["sample_size"], n_nodes),
             "dimensions": dims, "sources": sources, "total points": n_nodes,
+            # Coverage columns are exact only when they came from the adj-list.
+            "coverage source": "exact" if cfg["adjlist"] else "sampled",
+            "coverage sample": "" if cfg["adjlist"] else len(sample),
             "build time (s)": round(r.build_s, 3),
             "build wall (s)": round(r.wall_s, 3),
             "adjlist wall (s)": round(r.adj_s, 3),
