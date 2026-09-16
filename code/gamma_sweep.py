@@ -193,13 +193,17 @@ class CoverageEngine:
     """Replays neighbourhoods to get per-edge uncovered counts.
 
     Vectors and norms are loaded once and reused for every graph in the sweep --
-    that is the bulk of the setup cost, and it is identical across gammas. The
-    per-source distance row d(source, ยท) is also identical across graphs, so it
-    is cached and reused rather than recomputed once per gamma.
+    that is the bulk of the setup cost, and it is identical across gammas.
+
+    `cache_rows` keeps each computed d(source, .) row. It is off by default and
+    should stay off: write_adj_list visits every source exactly once per graph,
+    so nothing is ever read back, and the cache simply grows by n floats per
+    node -- 0.48 MB each on a 60k dataset, so 29 GB by the end of one pass. The
+    resulting allocator pressure slows the run down progressively.
     """
 
     def __init__(self, base_fbin, dtype="float64", alpha=1.0, chunk=100,
-                 cache_rows=True):
+                 cache_rows=False):
         self.xp, self.on_gpu = self._pick_backend()
         xp = self.xp
         print(f"loading {base_fbin} ...", flush=True)
@@ -223,7 +227,7 @@ class CoverageEngine:
             return np, False
 
     def d_source(self, source):
-        """d(source, ยท)^2 for every point. Same for every graph in the sweep."""
+        """d(source, .)^2 for every point."""
         hit = self._row_cache.get(source)
         if hit is not None:
             return hit
@@ -731,8 +735,10 @@ def main():
                    help="sweep gamma only, no stock Vamana run")
     p.add_argument("--no-adjlist", action="store_true",
                    help="build graphs only; skip coverage and stats")
-    p.add_argument("--no-row-cache", action="store_true",
-                   help="do not cache per-source distance rows (lower memory)")
+    p.add_argument("--row-cache", action="store_true",
+                   help="cache per-source distance rows. Off by default: each "
+                        "source is visited once per graph, so the cache is "
+                        "never read and grows by n floats per node")
     p.add_argument("--rebuild", action="store_true",
                    help="rebuild graphs even when the file already exists")
     p.add_argument("--verbose", action="store_true")
@@ -794,7 +800,7 @@ def main():
     stage("2/4  coverage adj-lists")
     engine = CoverageEngine(cfg["base_fbin"], dtype=cfg["dtype"],
                             alpha=cfg["coverage_alpha"], chunk=cfg["chunk"],
-                            cache_rows=not args.no_row_cache)
+                            cache_rows=args.row_cache)
     n_nodes = engine.n
     for ri, r in enumerate(runs, 1):
         label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method

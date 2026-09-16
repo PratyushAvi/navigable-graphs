@@ -100,16 +100,13 @@ if [[ -n "$SAMPLE_SIZE" ]]; then EXTRA="$EXTRA --sample-size $SAMPLE_SIZE"; fi
 if [[ -n "$EDGE_MAX"    ]]; then EXTRA="$EXTRA --edge-max $EDGE_MAX"; fi
 if [[ "$SEARCH" == "1"  ]]; then EXTRA="$EXTRA --search --search-k $SEARCH_K"; fi  # unquoted: several k
 
-# Large datasets: the per-source distance-row cache is O(n) floats per cached
-# source, so it is only worth it well below a million points.
+# The per-source distance-row cache is off by default: each source is visited
+# once per graph, so it is never read back and just accumulates n floats per
+# node. Nothing to pass here.
 NPTS=$($SING /bin/bash -c "source /ext3/env.sh && conda activate big_ann && \
     python -c \"import numpy as np,sys; f=open('$BASE_FBIN','rb'); \
     print(int(np.fromfile(f,dtype=np.int32,count=2)[0]))\"")
 echo "points: $NPTS"
-if (( NPTS > 200000 )); then
-    echo "large dataset -> --no-row-cache"
-    EXTRA="$EXTRA --no-row-cache"
-fi
 
 srun $SING /bin/bash -c "
     source /ext3/env.sh && conda activate big_ann && \
