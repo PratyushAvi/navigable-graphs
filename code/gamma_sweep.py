@@ -237,9 +237,16 @@ class CoverageEngine:
             self._row_cache[source] = row
         return row
 
-    def neighborhood_with_uncov(self, source, neighbors):
+    def neighborhood_with_uncov(self, source, neighbors, d_src=None):
+        """Replay one node's edges, recording the uncovered count after each.
+
+        `d_src` is d(source, .)^2. It depends only on the source, not on the
+        graph, so when several graphs are processed together it is computed once
+        and passed in rather than recomputed per graph.
+        """
         xp = self.xp
-        d_src = self.d_source(source)
+        if d_src is None:
+            d_src = self.d_source(source)
         uncov = xp.arange(self.n, dtype=xp.int32)
         uncov = uncov[uncov != source]
         d_uncov = d_src[uncov]
@@ -284,6 +291,78 @@ def completed_nodes(path):
             done += 1
         f.truncate(good)
     return done
+
+
+def truncate_to_lines(path, keep):
+    """Cut `path` down to its first `keep` lines."""
+    if not os.path.exists(path):
+        return
+    kept, offset = 0, 0
+    with open(path, "r+") as f:
+        for line in f:
+            if kept >= keep:
+                break
+            offset += len(line.encode())
+            kept += 1
+        f.truncate(offset)
+
+
+def write_adj_lists(engine, graphs, out_paths, limit=None, resume=True,
+                    desc=None):
+    """Write the coverage adj-list for several graphs in one pass.
+
+    d(v, .) is a full n x dim matvec and is the same for every graph, so the
+    loop runs vertex-outer: compute the row once, then replay each graph's
+    neighbourhood of v against it. That is one matvec per vertex instead of one
+    per vertex per graph, and only the single row is held at a time.
+
+    All files advance in lockstep, so resuming means finding the shortest and
+    trimming the rest back to it. The CSR graph files are written before this
+    stage and are not touched here, so nothing needs rebuilding on a resume.
+    """
+    loaded = [read_csr(g) for g in graphs]
+    total = min(len(ip) - 1 for ip, _, _ in loaded)
+    if limit:
+        total = min(total, limit)
+
+    if resume:
+        # completed_nodes repairs a torn tail in each file; the common prefix is
+        # then the shortest of them, and any file that ran ahead is trimmed back.
+        starts = [completed_nodes(p) for p in out_paths]
+        start_at = min(starts)
+        for p, st in zip(out_paths, starts):
+            if st > start_at:
+                truncate_to_lines(p, start_at)
+    else:
+        start_at = 0
+
+    if start_at >= total:
+        print(f"  adj-lists complete ({start_at:,} nodes), skipping", flush=True)
+        return 0.0
+    if start_at:
+        print(f"  resuming adj-lists at node {start_at:,}/{total:,}", flush=True)
+
+    t0 = time.perf_counter()
+    mode = "a" if start_at else "w"
+    files = [open(p, mode) for p in out_paths]
+    bar = tqdm(total=total, initial=start_at, unit="node",
+               desc=desc or "coverage", smoothing=0.05, dynamic_ncols=True,
+               mininterval=BAR_INTERVAL, miniters=0, file=sys.stdout,
+               ascii=not _IS_TTY)
+    try:
+        for i in range(start_at, total):
+            d_src = engine.d_source(i)          # once for every graph
+            for (indptr, neighbors, _), fh in zip(loaded, files):
+                nbrs = neighbors[indptr[i]:indptr[i + 1]]
+                rec = engine.neighborhood_with_uncov(i, nbrs, d_src)
+                fh.write(f"{i} {rec}\n")
+                fh.flush()
+            bar.update(1)
+    finally:
+        bar.close()
+        for fh in files:
+            fh.close()
+    return time.perf_counter() - t0
 
 
 def write_adj_list(engine, graph_path, out_path, limit=None, resume=True,
@@ -803,13 +882,19 @@ def main():
                             cache_rows=args.row_cache)
     n_nodes = engine.n
     for ri, r in enumerate(runs, 1):
-        label = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
-        label = f"[{ri}/{len(runs)}] {label}"
-        print(f"{label} -> {r.adj.name}", flush=True)
-        r.adj_s = write_adj_list(engine, r.graph, r.adj, limit=cfg["limit"],
-                                 desc=label)
-        if r.adj_s:
-            print(f"  adj-list {r.adj_s:.1f}s", flush=True)
+        lbl = f"{r.method} gamma={r.gamma}" if r.gamma is not None else r.method
+        print(f"  [{ri}/{len(runs)}] {lbl} -> {r.adj.name}", flush=True)
+
+    # One pass over the vertices for all graphs: d(v, .) is computed once and
+    # shared, instead of once per graph.
+    total_adj_s = write_adj_lists(
+        engine, [r.graph for r in runs], [r.adj for r in runs],
+        limit=cfg["limit"], desc=f"coverage ({len(runs)} graphs)")
+    for r in runs:
+        r.adj_s = total_adj_s / len(runs)      # shared pass: split evenly
+    if total_adj_s:
+        print(f"  adj-lists {total_adj_s:.1f}s for {len(runs)} graphs "
+              f"({total_adj_s/len(runs):.1f}s each)", flush=True)
 
     # ---- stats -----------------------------------------------------------
     stage("3/4  stats")
