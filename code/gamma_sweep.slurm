@@ -112,7 +112,12 @@ NPTS=$($SING /bin/bash -c "source /ext3/env.sh && conda activate big_ann && \
     print(int(np.fromfile(f,dtype=np.int32,count=2)[0]))\"")
 echo "points: $NPTS"
 
-srun $SING /bin/bash -c "
+# No srun: this is a single task on one node, so the step adds nothing but a
+# chance to fail. srun's default binding cannot always satisfy a non-contiguous
+# allocation mask ("CPU binding outside of job step allocation"), which is why
+# the other scripts here pass --cpu-bind=none. Running the container directly
+# inherits the job's full allocation.
+$SING /bin/bash -c "
     source /ext3/env.sh && conda activate big_ann && \
     cd $CODE && \
     python -u gamma_sweep.py \
