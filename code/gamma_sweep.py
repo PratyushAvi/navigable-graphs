@@ -690,7 +690,7 @@ def parlay_search(binary, graph_path, base_fbin, query_fbin, gt_path, res_path,
 # --------------------------------------------------------------------------
 STAT_COLUMNS = [
     "dataset", "metric", "method", "gamma", "alpha", "R", "L", "S", "dimensions",
-    "coverage source", "coverage sample",
+    "estimated coverage", "coverage sample",
     "sources", "total points", "sweep", "coverage", "edges",
     "mean out degree", "median out degree", "min out degree", "max out degree",
     "median in degree", "min in degree", "max in degree",
@@ -716,7 +716,7 @@ SEARCH_COLUMNS = [
 # file can be rebuilt incrementally as gammas are added. Same upsert pattern as
 # coverage_to_degree_analysis.py.
 STATS_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L", "S",
-             "sweep", "coverage", "edges"]
+             "estimated coverage", "sweep", "coverage", "edges"]
 SEARCH_KEY = ["dataset", "metric", "method", "gamma", "alpha", "R", "L", "S",
               "k", "target recall", "pass"]
 
@@ -972,8 +972,9 @@ def main():
             "S": "" if r.gamma is None else resolved_sample_size(
                 cfg["sample_size"], n_nodes),
             "dimensions": dims, "sources": sources, "total points": n_nodes,
-            # Coverage columns are exact only when they came from the adj-list.
-            "coverage source": "exact" if cfg["adjlist"] else "sampled",
+            # The coverage columns are exact only when they came from the
+            # adj-list pass; otherwise they are scaled from a sample.
+            "estimated coverage": 0 if cfg["adjlist"] else 1,
             "coverage sample": "" if cfg["adjlist"] else len(sample),
             "build time (s)": round(r.build_s, 3),
             "build wall (s)": round(r.wall_s, 3),
