@@ -309,7 +309,7 @@ def write_adj_list(engine, graph_path, out_path, limit=None, resume=True,
     start_at = completed_nodes(out_path) if resume else 0
     if start_at >= total:
         print(f"  adj-list complete ({start_at:,} nodes), skipping", flush=True)
-        return 0.0
+        return None          # measured nothing; do not overwrite an earlier timing
     if start_at:
         print(f"  resuming adj-list at node {start_at:,}/{total:,}", flush=True)
 
@@ -730,11 +730,23 @@ def upsert_csv(path, rows, columns, key_cols):
 
     kept = []
     if path.exists():
-        new_keys = {tuple(str(r.get(c, "")) for c in key_cols) for r in new}
+        by_key = {}
+        for r in new:
+            by_key[tuple(str(r.get(c, "")) for c in key_cols)] = r
         with open(path, newline="") as fh:
             for r in csv.DictReader(fh):
-                if tuple(str(r.get(c, "")) for c in key_cols) not in new_keys:
+                k = tuple(str(r.get(c, "")) for c in key_cols)
+                replacement = by_key.get(k)
+                if replacement is None:
                     kept.append({c: r.get(c, "") for c in columns})
+                    continue
+                # This row is being replaced, but a blank field in the new row
+                # means "not measured this run" rather than "no value" -- a
+                # skipped build records no time, and must not erase the time
+                # logged by the run that did the work.
+                for c in columns:
+                    if replacement.get(c, "") == "" and r.get(c, "") != "":
+                        replacement[c] = r[c]
 
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "w", newline="") as fh:
@@ -795,9 +807,12 @@ class RunSpec:
     gamma: float | None
     graph: Path
     adj: Path
-    build_s: float = 0.0
-    wall_s: float = 0.0
-    adj_s: float = 0.0
+    # None means "not measured in this run" -- the stage was skipped because the
+    # work was already done. Writing 0.0 would overwrite the real timing from the
+    # run that did it, since the upsert replaces the whole row.
+    build_s: float | None = None
+    wall_s: float | None = None
+    adj_s: float | None = None
 
 
 def main():
@@ -915,7 +930,7 @@ def main():
             print(f"{label} -> {r.adj.name}", flush=True)
             r.adj_s = write_adj_list(engine, r.graph, r.adj,
                                      limit=cfg["limit"], desc=label)
-            if r.adj_s:
+            if r.adj_s is not None:
                 print(f"  adj-list {r.adj_s:.1f}s", flush=True)
     else:
         stage("2/4  coverage adj-lists (skipped)")
@@ -976,9 +991,9 @@ def main():
             # adj-list pass; otherwise they are scaled from a sample.
             "estimated coverage": 0 if cfg["adjlist"] else 1,
             "coverage sample": "" if cfg["adjlist"] else len(sample),
-            "build time (s)": round(r.build_s, 3),
-            "build wall (s)": round(r.wall_s, 3),
-            "adjlist wall (s)": round(r.adj_s, 3),
+            "build time (s)": "" if r.build_s is None else round(r.build_s, 3),
+            "build wall (s)": "" if r.wall_s is None else round(r.wall_s, 3),
+            "adjlist wall (s)": "" if r.adj_s is None else round(r.adj_s, 3),
             **summ,
         }
         for row in c_rows + e_rows:
